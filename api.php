@@ -1,79 +1,95 @@
 <?php
 // api.php
 
-// Define que o retorno será JSON e permite acesso
+// Define cabeçalhos para evitar cache e permitir acesso
 header('Content-Type: application/json; charset=utf-8');
 header("Access-Control-Allow-Origin: *");
+header("Cache-Control: no-cache, no-store, must-revalidate");
 
 // --- CONFIGURAÇÕES DA API TOTVS ---
-// Certifique-se que o IP e Porta estão corretos
-$url = "http://127.0.0.1:83/rest/api/retail/v1/APIOMS01";
+// URL Base fornecida + Endpoint do serviço
+$urlBase = "https://capetroasfaltos188713.protheus.cloudtotvs.com.br:10260/rest";
+$endpoint = "/api/retail/v1/APIOMS01";
+$urlCompleta = $urlBase . $endpoint;
+
 $usuario = "admin";
-$senha   = "admin";
+$senha   = "totvs@2025";
 
 // Inicia o cURL
 $ch = curl_init();
 
 // Configurações da requisição
-curl_setopt($ch, CURLOPT_URL, $url);
+curl_setopt($ch, CURLOPT_URL, $urlCompleta);
 curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-curl_setopt($ch, CURLOPT_TIMEOUT, 10); // Aguarda no máximo 10 segundos
+curl_setopt($ch, CURLOPT_TIMEOUT, 15); // Aumentei um pouco o tempo limite para Cloud
 curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
 curl_setopt($ch, CURLOPT_USERPWD, "$usuario:$senha");
-// curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false); // Descomente se usar HTTPS local
+
+// --- CORREÇÃO DO ERRO HTTPS/SSL ---
+// Estas duas linhas ignoram erros de certificado SSL.
+// Isso permite que o PHP leia o "Erro 500" ao invés de falhar na conexão.
+curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
 
 // Executa
 $resposta = curl_exec($ch);
 $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
 $curlErro = curl_error($ch);
-$curlErrno = curl_errno($ch); // Pega o número do erro para identificarmos se é Timeout
+$curlErrno = curl_errno($ch);
 
 curl_close($ch);
 
-// --- TRATAMENTO DE ERROS AMIGÁVEL ---
+// --- TRATAMENTO DE ERROS ---
 
-// 1. Erros de Conexão do PHP com o Servidor (Timeout, DNS, Porta fechada)
+// 1. Erros de Conexão REAL (Internet caiu, DNS falhou, Timeout)
 if ($curlErro) {
-    http_response_code(503); // Código 503 = Serviço Indisponível
+    http_response_code(503);
     
-    $mensagemAmigavel = "Erro desconhecido de conexão.";
-
-    // Verifica se é Timeout (Erro 28) ou Falha de Conexão (Erro 7)
+    // Tratamento específico para Timeout
     if ($curlErrno == 28) {
-        $mensagemAmigavel = "O servidor demorou muito para responder. Tentando novamente...";
-    } elseif ($curlErrno == 7) {
-        $mensagemAmigavel = "Não foi possível conectar ao servidor. Verifique se a API do Protheus está online.";
+        $msg = "O servidor demorou muito para responder (Timeout).";
     } else {
-        $mensagemAmigavel = "Falha de comunicação com o sistema. (Cód: $curlErrno)";
+        $msg = "Falha de conexão com a API: " . $curlErro;
     }
-
-    // Retorna apenas a mensagem limpa para o usuário
-    echo json_encode(["error" => $mensagemAmigavel]);
+    
+    echo json_encode(["error" => $msg]);
     exit;
 }
 
-// 2. Erros retornados pela própria API (Ex: 401 Senha errada, 500 Erro interno)
+// 2. Erros HTTP (O servidor respondeu, mas deu erro: 404, 500, 401)
 if ($httpCode >= 400) {
     http_response_code($httpCode);
     
-    // Tenta ler se a API mandou uma mensagem específica
+    // Tenta ler a mensagem de erro original da TOTVS
     $jsonErro = json_decode($resposta);
-    
+    $msgDetalhada = "";
+
+    // Se o retorno for um JSON válido com mensagem, usamos ele
+    if ($jsonErro && (isset($jsonErro->errorMessage) || isset($jsonErro->message))) {
+        $msgDetalhada = isset($jsonErro->errorMessage) ? $jsonErro->errorMessage : $jsonErro->message;
+    }
+
+    // Mensagens amigáveis para o painel
     if ($httpCode == 401 || $httpCode == 403) {
-        $msgFinal = "Acesso negado: Usuário ou senha incorretos na configuração.";
+        $msgFinal = "Acesso negado (401/403): Verifique usuário e senha.";
     } elseif ($httpCode == 404) {
-        $msgFinal = "Endereço da API não encontrado.";
+        $msgFinal = "Recurso não encontrado (404). Verifique a URL.";
     } elseif ($httpCode == 500) {
-        $msgFinal = "Erro interno no servidor do sistema.";
+        // Aqui mostramos que é erro interno, e se tiver detalhe, mostra também
+        $msgFinal = "Erro Interno do Servidor (500)";
+        if ($msgDetalhada) {
+            $msgFinal .= ": " . $msgDetalhada;
+        } else {
+            $msgFinal .= ". Verifique o log do Protheus (Console).";
+        }
     } else {
-        // Se a API mandou erro, usa ele, senão usa mensagem genérica
-        $msgFinal = $jsonErro ? "Erro do Sistema: " . json_encode($jsonErro) : "O servidor retornou um erro ($httpCode).";
+        $msgFinal = "Erro na API ($httpCode)" . ($msgDetalhada ? ": $msgDetalhada" : "");
     }
 
     echo json_encode(["error" => $msgFinal]);
     exit;
 }
 
-// Se deu tudo certo, imprime os dados originais
+// Se deu tudo certo (200 OK), retorna os dados
 echo $resposta;
 ?>

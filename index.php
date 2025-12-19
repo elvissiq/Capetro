@@ -128,7 +128,7 @@
     <div class="footer-info" id="status-sistema">Aguarde...</div>
 
     <script>
-        const TEMPO_ATUALIZACAO = 180000; 
+        const TEMPO_ATUALIZACAO = 600000; //10 minutos 
 
         async function buscarDados() {
             const tbody = document.querySelector('#gridOrdens tbody');
