@@ -1,0 +1,392 @@
+#Include "Protheus.ch"
+#Include "Totvs.ch"
+#Include "TopConn.ch"
+#Include "RPTDef.ch"
+#Include "FWPrintSetup.ch"
+#Include "tlpp-core.th"
+
+Static nPadLeft   := 0 //Alinhamento a Esquerda
+Static nPadRight  := 1 //Alinhamento a Direita
+Static nPadCenter := 2 //Alinhamento Centralizado
+
+/*/{Protheus.doc} CCOMR01
+Relatório de Nota Fiscal de Entrada Customizado
+@type function
+@version
+@author Elvis Siqueira (TOTVS Nordeste)
+@since 03/03/2026
+@Historico
+	03/03/2026 - Desenvolvimento do relatório (Elvis Siqueira)
+/*/
+User Function CCOMR01()
+Local aPergs   := {}
+Local cSerDe   := Space(FWTamSX3("F1_SERIE")[01])
+Local cSerAte  := Space(FWTamSX3("F1_SERIE")[01])
+Local cDocDe   := Space(FWTamSX3("F1_DOC")[01])
+Local cDocAte  := Space(FWTamSX3("F1_DOC")[01])
+Local cCodFor  := Space(FWTamSX3("A2_COD")[01])
+Local cLojFor  := Space(FWTamSX3("A2_LOJA")[01])
+Local dEmisDe  := CToD("")
+Local dEmisAt  := CToD("")
+Local nSelFil  := 2
+Local nPagNF   := 1
+
+	aAdd(aPergs, {1, "Serie De"   	    , cSerDe , "", ".T.", ""	, ".T.", 80,  .F.})
+    aAdd(aPergs, {1, "Serie Ate"   	    , cSerAte, "", ".T.", ""	, ".T.", 80,  .F.})
+    aAdd(aPergs, {1, "Nota De"   	    , cDocDe , "", ".T.", "SF1"	, ".T.", 80,  .F.})
+    aAdd(aPergs, {1, "Nota Ate"   	    , cDocAte, "", ".T.", "SF1"	, ".T.", 80,  .F.})
+    aAdd(aPergs, {1, "Fornecedor"   	, cCodFor, "", ".T.", "SA1"	, ".T.", 80,  .F.})
+	aAdd(aPergs, {1, "Loja"				, cLojFor, "", ".T.", ""	, ".T.", 80,  .F.})
+	aAdd(aPergs, {1, "Emissão De"		, dEmisDe, "", ".T.", ""	, ".T.", 80,  .F.})
+	aAdd(aPergs, {1, "Emissão Até"		, dEmisAt, "", ".T.", ""	, ".T.", 80,  .F.})
+    aAdd(aPergs, {2, "Seleciona Filial"	, nSelFil, {"1=Sim", "2=Não"}, 80, ".T.", .F.})
+    aAdd(aPergs, {2, "Página por NF"	, nPagNF , {"1=Sim", "2=Não"}, 80, ".T.", .F.})
+
+	If ParamBox(aPergs, "Relatório de Nota Fiscal x Contas a Pagar")
+		FWMsgRun(, {|oSay| RumRelato(oSay) }, "Processando", "Processando dados aguarde...")
+	EndIF
+
+Return 
+/*/{Protheus.doc} RumRelato
+	Gera o relatório de Contas a Receber
+/*/
+Static function RumRelato(oSay)
+Local cQry        := ""
+Local nAtual      := 0
+Local nTotal      := 0
+Local cCodFor     := ""
+Local aListFilial := {}
+Local cFiliais    := ""
+Local nY
+
+Private _cAlias  := GetNextAlias()
+Private cPictQtd := PesqPict("SD1", "D1_QUANT")
+Private cPictVlr := PesqPict("SE2", "E2_VALOR")
+
+//Variaveis do Relatório
+Private nLin      := 40
+Private nPosCol1  := 10
+Private nColFin   := 550
+Private cPathPDF  := ""
+Private oPrint    := Nil 
+Private oFont5    := TFont():New( "Arial",,5,,.F.,,,,,.F. )
+Private oFont5B   := TFont():New( "Arial",,5,,.T.,,,,,.F. )
+Private oFont7    := TFont():New( "Arial",,7,,.F.,,,,,.F. )
+Private oFont7B   := TFont():New( "Arial",,7,,.T.,,,,,.F. )
+Private oFont8    := TFont():New( "Arial",,8,,.F.,,,,,.F. )
+Private oFont8B   := TFont():New( "Arial",,8,,.T.,,,,,.F. )
+Private oFont10   := TFont():New( "Arial",,10,,.F.,,,,,.F. )
+Private oFont10B  := TFont():New( "Arial",,10,,.T.,,,,,.F. )
+Private oFont12   := TFont():New( "Arial",,12,,.F.,,,,,.F. )
+Private oFont12B  := TFont():New( "Arial",,12,,.T.,,,,,.F. )
+Private oFont14   := TFont():New( "Arial",,14,,.F.,,,,,.F. )
+Private oFont14B  := TFont():New( "Arial",,14,,.T.,,,,,.F. )
+
+//Posições das colunas no relatório
+Private nPosCol2  := 40
+Private nPosCol3  := 80
+Private nPosCol4  := 140
+Private nPosCol5  := 180
+Private nPosCol6  := 220
+Private nPosCol7  := 250
+Private nPosCol8  := 300
+Private nPosCol9  := 330
+Private nPosCol10 := 380
+Private nPosCol11 := 430
+Private nPosCol12 := 480
+Private nPagina   := 0
+
+//Totalizadores
+Private nValorTotal := 0
+Private nJurosTotal := 0
+Private nDescTotal  := 0
+Private nLiqTotal   := 0
+
+	// Inicialize o objeto desta forma
+	oPrint:=FWMSPrinter():New(FWTimeStamp(1),IMP_PDF, .F., , .T.)
+	oPrint:SetResolution(72)
+	oPrint:SetPortrait()
+	oPrint:SetPaperSize(DMPAPER_A4)
+	oPrint:SetMargin(60,60,60,60) // nEsquerda, nSuperior, nDireita, nInferior
+	oPrint:cPathPDF := GetTempPath()
+	
+    If ValType(MV_PAR09) == "C"
+        MV_PAR09 := Val(MV_PAR09)
+    EndIf 
+    If MV_PAR09 == 1
+        aListFilial := FwListBranches()
+        For nY := 1 To Len(aListFilial)
+            If aListFilial[nY][1]
+                cFiliais += IIF(nY > 1, ",", "") + aListFilial[nY][2]
+            EndIF 
+        Next nY
+    EndIF
+
+    If ValType(MV_PAR10) == "C"
+        MV_PAR10 := Val(MV_PAR10)
+    EndIf 
+
+	cQry := " SELECT SF1.F1_FILIAL, SF1.F1_DOC, SF1.F1_SERIE, SF1.F1_FORNECE, SF1.F1_LOJA, SF1.F1_EMISSAO,"
+	cQry += " SA2.A2_NOME, SA2.A2_TIPO, SA2.A2_CGC,"
+	cQry += " SM0.M0_FILIAL "
+	cQry += " FROM " + RetSQLName('SF1') + " SF1 "
+	cQry += " LEFT JOIN " + RetSQLName('SA2') + " SA2 ON SA2.A2_COD = SF1.F1_FORNECE AND SA2.A2_LOJA = SF1.F1_LOJA AND SA2.A2_FILIAL = '" + xFilial("SA2") + "' AND SA2.D_E_L_E_T_ <> '*' "
+	cQry += " LEFT JOIN SYS_COMPANY SM0 ON SM0.M0_CODIGO = '" + cEmpAnt + "' AND SM0.M0_CODFIL = SF1.F1_FILIAL AND SM0.D_E_L_E_T_ <> '*' "
+	cQry += " WHERE SF1.D_E_L_E_T_ <> '*' "
+	If !Empty(cFiliais)
+	cQry += " 	AND SF1.F1_FILIAL IN " + FormatIN(cFiliais, ",") + ""
+	EndIF
+	If !Empty(MV_PAR01) .AND. !Empty(MV_PAR02)
+	cQry += " 	AND SF1.F1_SERIE BETWEEN '" + MV_PAR01 + "' AND '" + MV_PAR02 + "'"
+	EndIF
+    If !Empty(MV_PAR03) .AND. !Empty(MV_PAR04)
+	cQry += " 	AND SF1.F1_DOC BETWEEN '" + MV_PAR03 + "' AND '" + MV_PAR04 + "'"
+	EndIF
+    If !Empty(MV_PAR05)
+	cQry += " 	AND SF1.F1_FORNECE = '" + MV_PAR05 + "'"
+	EndIF
+	If !Empty(MV_PAR06)
+	cQry += " 	AND SF1.F1_LOJA = '" + MV_PAR06 + "'"
+	EndIF
+	If !Empty(MV_PAR07) .AND. !Empty(MV_PAR08)
+	cQry += " 	AND SF1.F1_EMISSAO BETWEEN '" + DtoS(MV_PAR07) + "' AND '" + DtoS(MV_PAR08) + "'"
+	EndIF
+	cQry += " ORDER BY SF1.F1_FILIAL, SF1.F1_FORNECE, SF1.F1_LOJA, SF1.F1_SERIE, SF1.F1_DOC "
+	cQry := ChangeQuery(cQry)
+  	IF Select(_cAlias) <> 0
+      (_cAlias)->(DbCloseArea())
+    EndIf
+	dbUseArea(.T.,"TOPCONN",TcGenQry(,,cQry),_cAlias,.T.,.T.)
+	Count To nTotal
+
+	If nTotal <= 0
+		FWAlertWarning("Nenhum dado encontrado.","TOTVS")
+		IF Select(_cAlias) <> 0
+			(_cAlias)->(DbCloseArea())
+		EndIf
+		Return
+	EndIF 
+
+	(_cAlias)->(DbGoTop())
+
+	oSay:SetText("Iniciando processamento...")
+
+	While (_cAlias)->(!EoF())
+			
+		nAtual++
+        oSay:SetText("Analisando registro " + cValToChar(nAtual) + " de " + cValToChar(nTotal) + "...")
+		ProcessMessages()
+
+        IF MV_PAR10 == 1
+            nLin := 40
+            fnCabec()
+            fnFornec()
+            fnItemNF()
+            fnTitNF()
+        Else
+            If Empty(cCodFor)
+                nLin := 40
+                cCodFor := (_cAlias)->F1_FORNECE + (_cAlias)->F1_LOJA
+                fnCabec()
+                fnFornec()
+                fnItemNF()
+                fnTitNF()
+            ElseIF cCodFor <> (_cAlias)->F1_FORNECE + (_cAlias)->F1_LOJA
+                cCodFor := (_cAlias)->F1_FORNECE + (_cAlias)->F1_LOJA
+                If nLin+80 >= 800
+                    nLin := 40
+                    fnCabec()
+                EndIF
+                fnFornec()
+                fnItemNF()
+                fnTitNF()
+            Else
+                If nLin+80 >= 800
+                    nLin := 40
+                    fnCabec()
+                EndIF
+                fnFornec()
+                fnItemNF()
+                fnTitNF()
+            EndIF
+		EndIF
+	(_cAlias)->(DbSkip())
+	End
+
+	IF Select(_cAlias) <> 0
+		(_cAlias)->(DbCloseArea())
+	EndIf
+
+	oPrint:EndPage()
+	oPrint:Preview()
+	ms_flush()	
+
+Return
+
+/*/{Protheus.doc} fnCabec
+    Imprime o cabeçalho do relatório
+/*/
+Static Function fnCabec()
+Local cLogoEmp := fLogoEmp()
+	
+	nPagina += 1
+
+	oPrint:StartPage()
+	oPrint:SayBitmap(nLin-30, nPosCol1, cLogoEmp, 074, 074)
+	oPrint:SayAlign(nLin, nPosCol1, "Nota Fiscal de Entrada x Título a Pagar"		 		, oFont14B,nColFin,07,,nPadCenter,)
+	nLin += 10
+	oPrint:SayAlign(nLin, nPosCol12, "Data/Hora:  "  + DToC(dDataBase) + " às " + Time()	, oFont5 ,nColFin,07,,nPadLeft,)
+	nLin += 5
+	oPrint:SayAlign(nLin, nPosCol12, "Usuário:   " + cUserName					    		, oFont5 ,nColFin,07,,nPadLeft,)
+	nLin += 5
+	oPrint:SayAlign(nLin, nPosCol12, "Página:     " + cValToChar(nPagina)					, oFont5 ,nColFin,07,,nPadLeft,)
+	nLin += 10
+	oPrint:Line(nLin, nPosCol1, nLin, nColFin)
+	nLin += 5
+
+Return
+
+/*/{Protheus.doc} fLogoEmp
+    Funcao que retorna o logo da empresa (igual a DANFE)
+/*/
+Static Function fLogoEmp()
+	Local cGrpCompany := AllTrim(FWGrpCompany())
+	Local cCodEmpGrp  := AllTrim(FWCodEmp())
+	Local cUnitGrp    := AllTrim(FWUnitBusiness())
+	Local cFilGrp     := AllTrim(FWFilial())
+	Local cStart      := GetSrvProfString("Startpath", "")
+	Local cLogo       := cStart + "lgmid.png"
+
+	IF !File(cLogo)
+		cLogo :=  cStart + "lgmid" + cGrpCompany + ".png"
+		If !File(cLogo)
+			cLogo :=  cStart + "lgmid" + cGrpCompany + cCodEmpGrp + cUnitGrp + cFilGrp + ".png"
+		EndIF 
+	EndIF
+
+	//Se o arquivo Nao existir na temporaria, espera meio segundo para terminar a cópia
+	If !File(cLogo)
+		Sleep(500)
+	EndIf
+Return cLogo
+
+/*/{Protheus.doc} fnFornec
+    Imprime os dados do Fornecedor
+/*/
+Static Function fnFornec()
+Local cCodFor  := AllTrim((_cAlias)->F1_FORNECE)
+Local cLojFor  := AllTrim((_cAlias)->F1_LOJA)
+Local cNomFor  := AllTrim((_cAlias)->A2_NOME)
+Local cPictCGC := IIF((_cAlias)->A2_TIPO == "F", "@R 999.999.999-99", "@R 99.999.999/9999-99")
+Local cCGCCli  := Transform(AllTrim((_cAlias)->A2_CGC), cPictCGC)
+
+    oPrint:SayAlign(nLin, nPosCol1, "NOTA FISCAL"                                                                           , oFont8B ,480,07,,nPadLeft,)
+    nLin += 10
+    oPrint:Line(nLin, nPosCol1, nLin, nColFin)
+    nLin += 5
+	oPrint:SayAlign(nLin, nPosCol1, "Número - Série: " + Alltrim((_cAlias)->F1_DOC) + " - " + Alltrim((_cAlias)->F1_SERIE)  , oFont7 ,480,07,,nPadLeft,)
+    nLin += 7
+    oPrint:SayAlign(nLin, nPosCol1, "Data de Emissão: " + DToC(SToD((_cAlias)->F1_EMISSAO))                                 , oFont7 ,480,07,,nPadLeft,)
+    nLin += 7
+    oPrint:SayAlign(nLin, nPosCol1, "Fornecedor: " + cCodFor + "/" + cLojFor + " - " + cCGCCli	                            , oFont7,700,07,,nPadLeft,)
+	nLin += 7
+	oPrint:SayAlign(nLin, nPosCol1, "Nome: " + cNomFor					    					                            , oFont7 ,480,07,,nPadLeft,)
+	nLin += 10
+
+Return
+
+/*/{Protheus.doc} fnItemNF
+    Imprime os itens da Nota Fiscal
+/*/
+Static Function fnItemNF()
+
+    oPrint:SayAlign(nLin, nPosCol1, "ITENS"                                                 , oFont8B ,480,07,,nPadLeft,)
+    nLin += 10
+    oPrint:Line(nLin, nPosCol1, nLin, nColFin)
+    nLin += 5
+    oPrint:SayAlign(nLin, nPosCol1, "Item"   												, oFont5B ,480,07,,nPadLeft,)
+	oPrint:SayAlign(nLin, nPosCol2, "Produto"												, oFont5B ,480,07,,nPadLeft,)
+	oPrint:SayAlign(nLin, nPosCol3, "Descricao"												, oFont5B ,480,07,,nPadLeft,)
+	oPrint:SayAlign(nLin, nPosCol6, "Quantidade"											, oFont5B ,480,07,,nPadLeft,)
+	oPrint:SayAlign(nLin, nPosCol7, "Vlr. Unitario"											, oFont5B ,480,07,,nPadLeft,)
+	oPrint:SayAlign(nLin, nPosCol8, "Vlr.Total"												, oFont5B ,480,07,,nPadLeft,)
+	nLin += 10
+
+    DBSelectArea("SD1")
+    SD1->(DBSetOrder(1)) //D1_FILIAL+D1_DOC+D1_SERIE+D1_FORNECE+D1_LOJA+D1_COD+D1_ITEM
+	If SD1->(MsSeek((_cAlias)->F1_FILIAL + (_cAlias)->F1_DOC + (_cAlias)->F1_SERIE + (_cAlias)->F1_FORNECE + (_cAlias)->F1_LOJA))
+        DBSelectArea("SB1")
+        SB1->(DBSetOrder(1))
+        While SD1->(!Eof()) .AND. SD1->D1_FILIAL + SD1->D1_DOC + SD1->D1_SERIE + SD1->D1_FORNECE + SD1->D1_LOJA == (_cAlias)->F1_FILIAL + (_cAlias)->F1_DOC + (_cAlias)->F1_SERIE + (_cAlias)->F1_FORNECE + (_cAlias)->F1_LOJA
+            SB1->(MsSeek(xFilial("SB1")+SD1->D1_COD))
+            oPrint:SayAlign(nLin, nPosCol1, SD1->D1_ITEM									, oFont5 ,480,07,,nPadLeft,)
+            oPrint:SayAlign(nLin, nPosCol2, AllTrim(SD1->D1_COD)							, oFont5 ,480,07,,nPadLeft,)
+            oPrint:SayAlign(nLin, nPosCol3, AllTrim(SB1->B1_DESC)							, oFont5 ,480,07,,nPadLeft,)
+            oPrint:SayAlign(nLin, nPosCol6, AllTrim(AllToChar(SD1->D1_QUANT,cPictQtd))		, oFont5 ,480,07,,nPadLeft,)
+            oPrint:SayAlign(nLin, nPosCol7, AllTrim(AllToChar(SD1->D1_VUNIT,cPictVlr))		, oFont5 ,480,07,,nPadLeft,)
+            oPrint:SayAlign(nLin, nPosCol8, AllTrim(AllToChar(SD1->D1_TOTAL,cPictVlr))		, oFont5 ,480,07,,nPadLeft,)
+            nLin += 3
+            oPrint:SayAlign(nLin, nPosCol1, Replicate(".", 430)								, oFont5B ,900,07,,nPadLeft,)
+            nLin += 5
+            SD1->(DbSkip())
+        End
+        nLin += 10
+    EndIF
+
+Return
+
+/*/{Protheus.doc} fnTitNF
+    Imprime os títulos da Nota Fiscal
+/*/
+Static Function fnTitNF()
+Local cStatus := ""
+    
+    oPrint:SayAlign(nLin, nPosCol1, "TÍTULOS"                                               , oFont8B ,480,07,,nPadLeft,)
+    nLin += 10
+    oPrint:Line(nLin, nPosCol1, nLin, nColFin)
+    nLin += 5
+    oPrint:SayAlign(nLin, nPosCol1, "Prefixo"  												, oFont5B ,480,07,,nPadLeft,)
+	oPrint:SayAlign(nLin, nPosCol2, "Número"												, oFont5B ,480,07,,nPadLeft,)
+	oPrint:SayAlign(nLin, nPosCol3, "Parcela"												, oFont5B ,480,07,,nPadLeft,)
+	oPrint:SayAlign(nLin, nPosCol4, "Emissao"   											, oFont5B ,480,07,,nPadLeft,)
+	oPrint:SayAlign(nLin, nPosCol5, "Vencimento"											, oFont5B ,480,07,,nPadLeft,)
+	oPrint:SayAlign(nLin, nPosCol6, "Valor" 												, oFont5B ,480,07,,nPadLeft,)
+    oPrint:SayAlign(nLin, nPosCol7, "Status" 												, oFont5B ,480,07,,nPadLeft,)
+	nLin += 10
+
+    DBSelectArea("SE2")
+    SE2->(DBSetOrder(6)) //E2_FILIAL+E2_FORNECE+E2_LOJA+E2_PREFIXO+E2_NUM+E2_PARCELA+E2_TIPO
+	If SE2->(MsSeek((_cAlias)->F1_FILIAL + (_cAlias)->F1_FORNECE + (_cAlias)->F1_LOJA + (_cAlias)->F1_SERIE + (_cAlias)->F1_DOC))
+        While SE2->(!Eof()) .AND. SE2->E2_FILIAL + SE2->E2_FORNECE + SE2->E2_LOJA + SE2->E2_PREFIXO + SE2->E2_NUM == (_cAlias)->F1_FILIAL + (_cAlias)->F1_FORNECE + (_cAlias)->F1_LOJA + (_cAlias)->F1_SERIE + (_cAlias)->F1_DOC
+            oPrint:SayAlign(nLin, nPosCol1, SE2->E2_PREFIXO									, oFont5 ,480,07,,nPadLeft,)
+            oPrint:SayAlign(nLin, nPosCol2, AllTrim(SE2->E2_NUM)							, oFont5 ,480,07,,nPadLeft,)
+            oPrint:SayAlign(nLin, nPosCol3, SE2->E2_PARCELA	    							, oFont5 ,480,07,,nPadLeft,)
+            oPrint:SayAlign(nLin, nPosCol4, DTOC(SE2->E2_EMISSAO)                   		, oFont5 ,480,07,,nPadLeft,)
+            oPrint:SayAlign(nLin, nPosCol5, DTOC(SE2->E2_VENCREA)		                    , oFont5 ,480,07,,nPadLeft,)
+            oPrint:SayAlign(nLin, nPosCol6, AllTrim(AllToChar(SE2->E2_VALOR,cPictVlr))		, oFont5 ,480,07,,nPadLeft,)
+            Do Case
+                Case Empty(SE2->E2_BAIXA)
+                    If SE2->E2_VENCREA <= dDataBase
+                        cStatus := "A VENCER"
+                    Else
+                        cStatus := "VENCIDO"
+                    EndIF
+                Case !Empty(SE2->E2_BAIXA) .AND. Empty(SE2->E2_SALDO)
+                    cStatus := "PAGO"
+                Case !Empty(SE2->E2_BAIXA) .AND. !Empty(SE2->E2_SALDO)
+                    If SE2->E2_VENCREA <= dDataBase
+                        cStatus := "PAGO PARCIALMENTE - A VENCER"
+                    Else
+                        cStatus := "PAGO PARCIALMENTE - VENCIDO"
+                    EndIF
+            End Case
+            oPrint:SayAlign(nLin, nPosCol7, cStatus		                                    , oFont5 ,480,07,,nPadLeft,)
+            
+            nLin += 3
+            oPrint:SayAlign(nLin, nPosCol1, Replicate(".", 430)								, oFont5B ,900,07,,nPadLeft,)
+            nLin += 5
+            SE2->(DbSkip())
+        End
+    EndIF
+
+Return
