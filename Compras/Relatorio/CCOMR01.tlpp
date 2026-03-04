@@ -35,7 +35,7 @@ Local nPagNF   := 1
     aAdd(aPergs, {1, "Serie Ate"   	    , cSerAte, "", ".T.", ""	, ".T.", 80,  .F.})
     aAdd(aPergs, {1, "Nota De"   	    , cDocDe , "", ".T.", "SF1"	, ".T.", 80,  .F.})
     aAdd(aPergs, {1, "Nota Ate"   	    , cDocAte, "", ".T.", "SF1"	, ".T.", 80,  .F.})
-    aAdd(aPergs, {1, "Fornecedor"   	, cCodFor, "", ".T.", "SA1"	, ".T.", 80,  .F.})
+    aAdd(aPergs, {1, "Fornecedor"   	, cCodFor, "", ".T.", "SA2"	, ".T.", 80,  .F.})
 	aAdd(aPergs, {1, "Loja"				, cLojFor, "", ".T.", ""	, ".T.", 80,  .F.})
 	aAdd(aPergs, {1, "Emissão De"		, dEmisDe, "", ".T.", ""	, ".T.", 80,  .F.})
 	aAdd(aPergs, {1, "Emissão Até"		, dEmisAt, "", ".T.", ""	, ".T.", 80,  .F.})

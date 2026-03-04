@@ -1,0 +1,233 @@
+#Include "Protheus.ch"
+#Include "Totvs.ch"
+#Include "TopConn.ch"
+#Include "RPTDef.ch"
+#Include "FWPrintSetup.ch"
+#Include "tlpp-core.th"
+
+Static nAliLeft    := 1 //Alinhamento a Esquerda
+Static nAliCenter  := 2 //Alinhamento Centralizado
+Static nAliRight   := 3 //Alinhamento a Direita
+Static nForGeneral := 1 //Formato Geral
+Static nForNumber  := 2 //Formato Numerico
+Static nForMoneta  := 3 //Formato Moeda
+Static nForData    := 4 //Formato Data
+
+/*/{Protheus.doc} CFINR01
+Relatório de Contas a Pagar Customizado
+@type function
+@version
+@author Elvis Siqueira (TOTVS Nordeste)
+@since 04/03/2026
+@Historico
+	04/03/2026 - Desenvolvimento do relatório (Elvis Siqueira)
+/*/
+User Function CFINR01()
+Local aPergs      := {}
+Local cPrefixDe   := Space(FWTamSX3("E2_PREFIXO")[01])
+Local cPrefixAte  := Space(FWTamSX3("E2_PREFIXO")[01])
+Local cNumeroDe   := Space(FWTamSX3("E2_NUM")[01])
+Local cNumeroAte  := Space(FWTamSX3("E2_NUM")[01])
+Local cCodFor     := Space(FWTamSX3("E2_FORNECE")[01])
+Local cLojFor     := Space(FWTamSX3("E2_LOJA")[01])
+Local dEmisDe     := CToD("")
+Local dEmisAt     := CToD("")
+Local dBaixaDe    := CToD("")
+Local dBaixaAt    := CToD("")
+Local nSelFil     := 2
+
+	aAdd(aPergs, {1, "Prefixo De"       , cPrefixDe , "", ".T.", ""	, ".T.", 80,  .F.})
+    aAdd(aPergs, {1, "Prefixo Ate"      , cPrefixAte, "", ".T.", ""	, ".T.", 80,  .F.})
+    aAdd(aPergs, {1, "Numero De"   	    , cNumeroDe , "", ".T.", "SE2"	, ".T.", 80,  .F.})
+    aAdd(aPergs, {1, "Numero Ate"  	    , cNumeroAte, "", ".T.", "SE2"	, ".T.", 80,  .F.})
+    aAdd(aPergs, {1, "Fornecedor"   	, cCodFor   , "", ".T.", "SA2"	, ".T.", 80,  .F.})
+	aAdd(aPergs, {1, "Loja"				, cLojFor   , "", ".T.", ""	, ".T.", 80,  .F.})
+	aAdd(aPergs, {1, "Emissão De"		, dEmisDe   , "", ".T.", ""	, ".T.", 80,  .F.})
+	aAdd(aPergs, {1, "Emissão Até"		, dEmisAt   , "", ".T.", ""	, ".T.", 80,  .F.})
+    aAdd(aPergs, {1, "Dt da Baixa De"	, dBaixaDe  , "", ".T.", ""	, ".T.", 80,  .F.})
+	aAdd(aPergs, {1, "Dt da Baixa Ate"	, dBaixaAt  , "", ".T.", ""	, ".T.", 80,  .F.})
+    aAdd(aPergs, {2, "Seleciona Filial"	, nSelFil   , {"1=Sim", "2=Não"}, 80, ".T.", .F.})
+
+	If ParamBox(aPergs, "Titulos a Pagar x Nota Fiscal")
+		FWMsgRun(, {|oSay| RumRelato(oSay) }, "Processando", "Processando dados aguarde...")
+	EndIF
+
+Return 
+/*/{Protheus.doc} RumRelato
+	Gera o relatório de Contas a Receber
+/*/
+Static function RumRelato(oSay)
+Local oExcel      := Nil
+Local oOpenExcel  := Nil
+Local cQry        := ""
+Local nAtual      := 0
+Local nTotal      := 0
+Local aListFilial := {}
+Local cFiliais    := ""
+Local cPlanilha   := ""
+Local cTabela     := ""
+Local cStatus     := ""
+Local cArquivo    := ""
+Local nY
+
+Private _cAlias   := GetNextAlias()
+Private cProdutos := "" 
+
+    If ValType(MV_PAR11) == "C"
+        MV_PAR11 := Val(MV_PAR09)
+    EndIf 
+    If MV_PAR11 == 1
+        aListFilial := FwListBranches()
+        For nY := 1 To Len(aListFilial)
+            If aListFilial[nY][1]
+                cFiliais += IIF(nY > 1, ",", "") + aListFilial[nY][2]
+            EndIF 
+        Next nY
+    EndIF
+
+	cQry := " SELECT SE2.E2_FILIAL, SE2.E2_PREFIXO, SE2.E2_NUM, SE2.E2_FORNECE, SE2.E2_LOJA, SE2.E2_EMISSAO, SE2.E2_VENCREA, SE2.E2_NOMFOR, E2_VALOR, SE2.E2_BAIXA, SE2.E2_SALDO, SF1.F1_DOC, SF1.F1_SERIE, SF1.F1_EMISSAO "
+	cQry += " FROM " + RetSQLName('SE2') + " SE2 "
+	cQry += " LEFT JOIN " + RetSQLName('SF1') + " SF1 ON SF1.F1_FILIAL = SE2.E2_FILIAL AND SF1.F1_FORNECE = SE2.E2_FORNECE AND SF1.F1_LOJA = SE2.E2_LOJA AND SF1.F1_SERIE = SE2.E2_PREFIXO AND SF1.F1_DOC = SE2.E2_NUM AND SF1.D_E_L_E_T_ <> '*' "
+	cQry += " WHERE SE2.D_E_L_E_T_ <> '*' "
+	If !Empty(cFiliais)
+	cQry += " 	AND SE2.E2_FILIAL IN " + FormatIN(cFiliais, ",") + ""
+	EndIF
+	If !Empty(MV_PAR01) .AND. !Empty(MV_PAR02)
+	cQry += " 	AND SE2.E2_PREFIXO BETWEEN '" + MV_PAR01 + "' AND '" + MV_PAR02 + "'"
+	EndIF
+    If !Empty(MV_PAR03) .AND. !Empty(MV_PAR04)
+	cQry += " 	AND SE2.E2_NUM BETWEEN '" + MV_PAR03 + "' AND '" + MV_PAR04 + "'"
+	EndIF
+    If !Empty(MV_PAR05)
+	cQry += " 	AND SE2.E2_FORNECE = '" + MV_PAR05 + "'"
+	EndIF
+	If !Empty(MV_PAR06)
+	cQry += " 	AND SE2.E2_LOJA = '" + MV_PAR06 + "'"
+	EndIF
+	If !Empty(MV_PAR07) .AND. !Empty(MV_PAR08)
+	cQry += " 	AND SE2.E2_EMISSAO BETWEEN '" + DtoS(MV_PAR07) + "' AND '" + DtoS(MV_PAR08) + "'"
+	EndIF
+    If !Empty(MV_PAR09) .AND. !Empty(MV_PAR10)
+	cQry += " 	AND SE2.E2_BAIXA BETWEEN '" + DtoS(MV_PAR09) + "' AND '" + DtoS(MV_PAR10) + "'"
+	EndIF
+	cQry += " ORDER BY SE2.E2_FILIAL, SE2.E2_FORNECE, SE2.E2_LOJA, SE2.E2_EMISSAO, SE2.E2_PREFIXO, SE2.E2_NUM "
+	cQry := ChangeQuery(cQry)
+  	IF Select(_cAlias) <> 0
+      (_cAlias)->(DbCloseArea())
+    EndIf
+	dbUseArea(.T.,"TOPCONN",TcGenQry(,,cQry),_cAlias,.T.,.T.)
+	Count To nTotal
+
+	If nTotal <= 0
+		FWAlertWarning("Nenhum dado encontrado.","TOTVS")
+		IF Select(_cAlias) <> 0
+			(_cAlias)->(DbCloseArea())
+		EndIf
+		Return
+	Else
+        cPlanilha := "Titulos a Pagar x Nota Fiscal - " + FWTimeStamp()
+        cTabela  := "Titulos"
+        // Inicialize o objeto desta forma
+        oExcel := FWMsExcelEx():New()
+        oExcel:AddworkSheet(cPlanilha)
+        oExcel:AddTable(cPlanilha,cTabela)
+        oExcel:AddColumn(cPlanilha,cTabela,"Fornecedor"        ,nAliLeft,nForGeneral)
+        oExcel:AddColumn(cPlanilha,cTabela,"Nº NOTA FISCAL"    ,nAliLeft,nForGeneral)
+        oExcel:AddColumn(cPlanilha,cTabela,"DATA DE EMISSAO"   ,nAliLeft,nForData   )
+        oExcel:AddColumn(cPlanilha,cTabela,"DATA DE VENCIMENTO",nAliLeft,nForData   )
+        oExcel:AddColumn(cPlanilha,cTabela,"VALOR"             ,nAliLeft,nForMoneta )
+        oExcel:AddColumn(cPlanilha,cTabela,"STATUS"            ,nAliLeft,nForGeneral)
+        oExcel:AddColumn(cPlanilha,cTabela,"DESCRICAO"         ,nAliLeft,nForGeneral)
+        oExcel:SetCelBold(.T.)
+        oExcel:SetCelFont('Arial')
+        oExcel:SetCelItalic(.F.)
+        oExcel:SetCelUnderLine(.F.)
+        oExcel:SetCelSizeFont(10)
+    EndIF 
+
+	(_cAlias)->(DbGoTop())
+
+	oSay:SetText("Iniciando processamento...")
+
+	While (_cAlias)->(!EoF())
+			
+		nAtual++
+        oSay:SetText("Analisando registro " + cValToChar(nAtual) + " de " + cValToChar(nTotal) + "...")
+		//ProcessMessages()
+        
+        If !Empty((_cAlias)->F1_DOC) .AND. !Empty((_cAlias)->F1_SERIE)
+            fnItemNF()
+        Else
+            cProdutos := "     "
+        EndIF
+        
+        Do Case
+            Case Empty((_cAlias)->E2_BAIXA)
+                If SToD((_cAlias)->E2_VENCREA) >= dDataBase
+                    cStatus := "A VENCER"
+                Else
+                    cStatus := "VENCIDO"
+                EndIF
+            Case !Empty((_cAlias)->E2_BAIXA) .AND. Empty((_cAlias)->E2_SALDO)
+                cStatus := "PAGO"
+            Case !Empty((_cAlias)->E2_BAIXA) .AND. !Empty((_cAlias)->E2_SALDO)
+                If SToD((_cAlias)->E2_VENCREA) >= dDataBase
+                    cStatus := "PAGO PARCIALMENTE - A VENCER"
+                Else
+                    cStatus := "PAGO PARCIALMENTE - VENCIDO"
+                EndIF
+            Otherwise
+                cStatus := "     "
+        End Case
+
+        oExcel:AddRow(cPlanilha,cTabela,{(_cAlias)->E2_NOMFOR,;
+                                         (_cAlias)->F1_DOC,;
+                                         SToD((_cAlias)->E2_EMISSAO),;
+                                         SToD((_cAlias)->E2_VENCREA),;
+                                         (_cAlias)->E2_VALOR,;
+                                         cStatus,;
+                                         cProdutos})
+        
+	(_cAlias)->(DbSkip())
+	End
+
+	IF Select(_cAlias) <> 0
+		(_cAlias)->(DbCloseArea())
+	EndIf
+
+    cArquivo := GetTempPath()+FWTimeStamp()+".xml"
+
+    //Ativando o arquivo e gerando o xml
+	oExcel:Activate()
+    oExcel:GetXMLFile(cArquivo)
+
+    //Abrindo o excel e abrindo o arquivo xml
+    oOpenExcel := MsExcel():New()         //Abre uma nova conexão com Excel
+    oOpenExcel:WorkBooks:Open(cArquivo)   //Abre uma planilha
+    oOpenExcel:SetVisible(.T.)            //Visualiza a planilha
+    oOpenExcel:Destroy()                  //Encerra o processo do gerenciador de tarefas
+
+Return
+
+/*/{Protheus.doc} fnItemNF
+    Imprime os itens da Nota Fiscal
+/*/
+Static Function fnItemNF()
+
+    DBSelectArea("SD1")
+    SD1->(DBSetOrder(1)) //D1_FILIAL+D1_DOC+D1_SERIE+D1_FORNECE+D1_LOJA+D1_COD+D1_ITEM
+	If SD1->(MsSeek((_cAlias)->E2_FILIAL + (_cAlias)->F1_DOC + (_cAlias)->F1_SERIE + (_cAlias)->E2_FORNECE + (_cAlias)->E2_LOJA))
+        DBSelectArea("SB1")
+        SB1->(DBSetOrder(1))
+        While SD1->(!Eof()) .AND. SD1->D1_FILIAL + SD1->D1_DOC + SD1->D1_SERIE + SD1->D1_FORNECE + SD1->D1_LOJA == (_cAlias)->E2_FILIAL + (_cAlias)->F1_DOC + (_cAlias)->F1_SERIE + (_cAlias)->E2_FORNECE + (_cAlias)->E2_LOJA
+            SB1->(MsSeek(xFilial("SB1")+SD1->D1_COD))
+            If Empty(cProdutos)
+                cProdutos += AllTrim(SB1->B1_DESC)
+            Else
+                cProdutos += ", " + AllTrim(SB1->B1_DESC)
+            EndIF
+            SD1->(DbSkip())
+        End
+    EndIF
+
+Return
