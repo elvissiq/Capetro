@@ -14,9 +14,9 @@ Relatório de Nota Fiscal de Entrada Customizado
 @type function
 @version
 @author Elvis Siqueira (TOTVS Nordeste)
-@since 03/03/2026
+@since 04/03/2026
 @Historico
-	03/03/2026 - Desenvolvimento do relatório (Elvis Siqueira)
+	04/03/2026 - Desenvolvimento do relatório (Elvis Siqueira)
 /*/
 User Function CCOMR01()
 Local aPergs   := {}
@@ -307,9 +307,9 @@ Static Function fnItemNF()
     oPrint:SayAlign(nLin, nPosCol1, "Item"   												, oFont5B ,480,07,,nPadLeft,)
 	oPrint:SayAlign(nLin, nPosCol2, "Produto"												, oFont5B ,480,07,,nPadLeft,)
 	oPrint:SayAlign(nLin, nPosCol3, "Descricao"												, oFont5B ,480,07,,nPadLeft,)
-	oPrint:SayAlign(nLin, nPosCol6, "Quantidade"											, oFont5B ,480,07,,nPadLeft,)
-	oPrint:SayAlign(nLin, nPosCol7, "Vlr. Unitario"											, oFont5B ,480,07,,nPadLeft,)
-	oPrint:SayAlign(nLin, nPosCol8, "Vlr.Total"												, oFont5B ,480,07,,nPadLeft,)
+	oPrint:SayAlign(nLin, nPosCol7, "Quantidade"											, oFont5B ,480,07,,nPadLeft,)
+	oPrint:SayAlign(nLin, nPosCol8, "Vlr. Unitario"											, oFont5B ,480,07,,nPadLeft,)
+	oPrint:SayAlign(nLin, nPosCol9, "Vlr.Total"												, oFont5B ,480,07,,nPadLeft,)
 	nLin += 10
 
     DBSelectArea("SD1")
@@ -322,9 +322,9 @@ Static Function fnItemNF()
             oPrint:SayAlign(nLin, nPosCol1, SD1->D1_ITEM									, oFont5 ,480,07,,nPadLeft,)
             oPrint:SayAlign(nLin, nPosCol2, AllTrim(SD1->D1_COD)							, oFont5 ,480,07,,nPadLeft,)
             oPrint:SayAlign(nLin, nPosCol3, AllTrim(SB1->B1_DESC)							, oFont5 ,480,07,,nPadLeft,)
-            oPrint:SayAlign(nLin, nPosCol6, AllTrim(AllToChar(SD1->D1_QUANT,cPictQtd))		, oFont5 ,480,07,,nPadLeft,)
-            oPrint:SayAlign(nLin, nPosCol7, AllTrim(AllToChar(SD1->D1_VUNIT,cPictVlr))		, oFont5 ,480,07,,nPadLeft,)
-            oPrint:SayAlign(nLin, nPosCol8, AllTrim(AllToChar(SD1->D1_TOTAL,cPictVlr))		, oFont5 ,480,07,,nPadLeft,)
+            oPrint:SayAlign(nLin, nPosCol7, AllTrim(AllToChar(SD1->D1_QUANT,cPictQtd))		, oFont5 ,480,07,,nPadLeft,)
+            oPrint:SayAlign(nLin, nPosCol8, AllTrim(AllToChar(SD1->D1_VUNIT,cPictVlr))		, oFont5 ,480,07,,nPadLeft,)
+            oPrint:SayAlign(nLin, nPosCol9, AllTrim(AllToChar(SD1->D1_TOTAL,cPictVlr))		, oFont5 ,480,07,,nPadLeft,)
             nLin += 3
             oPrint:SayAlign(nLin, nPosCol1, Replicate(".", 430)								, oFont5B ,900,07,,nPadLeft,)
             nLin += 5
@@ -366,7 +366,7 @@ Local cStatus := ""
             oPrint:SayAlign(nLin, nPosCol6, AllTrim(AllToChar(SE2->E2_VALOR,cPictVlr))		, oFont5 ,480,07,,nPadLeft,)
             Do Case
                 Case Empty(SE2->E2_BAIXA)
-                    If SE2->E2_VENCREA <= dDataBase
+                    If SE2->E2_VENCREA >= dDataBase
                         cStatus := "A VENCER"
                     Else
                         cStatus := "VENCIDO"
@@ -374,7 +374,7 @@ Local cStatus := ""
                 Case !Empty(SE2->E2_BAIXA) .AND. Empty(SE2->E2_SALDO)
                     cStatus := "PAGO"
                 Case !Empty(SE2->E2_BAIXA) .AND. !Empty(SE2->E2_SALDO)
-                    If SE2->E2_VENCREA <= dDataBase
+                    If SE2->E2_VENCREA >= dDataBase
                         cStatus := "PAGO PARCIALMENTE - A VENCER"
                     Else
                         cStatus := "PAGO PARCIALMENTE - VENCIDO"
