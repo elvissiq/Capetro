@@ -18,9 +18,9 @@ Relatório de Contas a Pagar Customizado
 @type function
 @version
 @author Elvis Siqueira (TOTVS Nordeste)
-@since 04/03/2026
+@since 05/03/2026
 @Historico
-	04/03/2026 - Desenvolvimento do relatório (Elvis Siqueira)
+	05/03/2026 - Desenvolvimento do relatório (Elvis Siqueira)
 /*/
 User Function CFINR01()
 Local aPergs      := {}
@@ -74,7 +74,7 @@ Private _cAlias   := GetNextAlias()
 Private cProdutos := "" 
 
     If ValType(MV_PAR11) == "C"
-        MV_PAR11 := Val(MV_PAR09)
+        MV_PAR11 := Val(MV_PAR11)
     EndIf 
     If MV_PAR11 == 1
         aListFilial := FwListBranches()
