@@ -2,19 +2,22 @@
 #Include "FWMVCDef.ch"
 #Include "TBICONN.CH"
 #Include "TopConn.ch"
+#Include "Colors.ch"
+#Include "RPTDef.ch"
+#Include "FWPrintSetup.ch"
 
 // ---------------------------------------------------------------------------
-/*/ Rotina fnGerBol
-  Função responsável por selecionar banco para geração do borderô automatico.
+/*/ Rotina fnNFeBol
+  Função responsável por gerar a DANFE e o Boleto da Nota Fiscal.
   Retorno
   @historia
-  10/03/2026 - Desenvolvimento da Rotina.
+  11/03/2026 - Desenvolvimento da Rotina.
 /*/
 // ---------------------------------------------------------------------------
-User Function fnGerBol(cSerieNF,cIdsNfe)
+User Function fnNFeBol(cSerieNF,cIdsNfe)
 Local aArea       := FWGetArea()
-Local cNotasIN    := {}
-Local aTitAux     := {}
+Local aBankBol    := StrTokArr(SuperGetMV("MV_XBANKBO",.F.,""),"/")
+Local cNotasIN    := ""
 Local cQry        := ""
 Local _cAlias     := ""
 Local nY
@@ -33,6 +36,9 @@ Private cBank     := ""
 Private cAgenc    := ""
 Private cContCC   := ""
 Private cSubCC    := ""
+Private cNotaIni  := ""
+Private cNotaFin  := ""
+Private cSerDanfe := ""
 
 Default cSerieNF  := ""
 Default cIdsNfe   := ""
@@ -43,6 +49,10 @@ Default cIdsNfe   := ""
   aParam[3] := SubSTR(cIdsNfe,Len(cIdsNfe)-9)
   aParam[4] := MonthSub(dDataBase, 1)
   aParam[5] := MonthSum(dDataBase, 1)
+
+  cSerDanfe := aParam[1]
+  cNotaIni  := aParam[2]
+  cNotaFin  := aParam[3]
     
   For nY := 1 To 5
     aRetMonit := procMonitorDoc(cIdent,cURLTSS,aParam,nTpMonitor,"0" + cModelo,lCte,@cError)
@@ -51,8 +61,8 @@ Default cIdsNfe   := ""
           Exit
       EndIf
     EndIf
-    //Aguarda 3 segundos antes da próxima tentativa
-    Sleep(3000)
+    //Aguarda 2 segundos antes da próxima tentativa
+    Sleep(2000)
   Next nY
         
   If Len(aRetMonit) > 0
@@ -64,10 +74,12 @@ Default cIdsNfe   := ""
           cNotasIN += "/"+aRetMonit[nY][3]
         EndIF
       EndIF
-    Next nY 
-    cNotasIN := FormatIN(cNotasIN,"/")          
+    Next nY
+    cNotasIN := FormatIN(cNotasIN,"/")
+
+    zGerDanfe() //Gera a DANFE da Nota Fiscal          
           
-    If Len(cNotasIN) > 0
+    If Len(cNotasIN) > 0 .AND. Len(aBankBol) >= 4
       DBSelectArea("SA6")
       SA6->(DBSetOrder(1))
       If SA6->(MSSeek(xFilial("SA6") + PadR(aBankBol[1],FWTamSX3("A6_COD")[1]) + PadR(aBankBol[2],FWTamSX3("A6_AGENCIA")[1]) + PadR(aBankBol[3],FWTamSX3("A6_NUMCON")[1])))
@@ -80,22 +92,20 @@ Default cIdsNfe   := ""
           _cAlias := FWTimeStamp()
 
           cQry := "SELECT E1_FILIAL, E1_PREFIXO, E1_NUM, E1_PARCELA, E1_TIPO FROM " + RetSQLName('SE1') + " "
-          cQry += "WHERE D_E_L_E_T_ <> '*' "  
-          cQry += "AND E1_FILIAL  = '" + xFilial("SE1") + "' "
-          cQry += "AND E1_PREFIXO = '" + cSerieNF + "' "
-          cQry += "AND E1_NUMERO  IN " + cNotasIN + " "
+          cQry += " WHERE D_E_L_E_T_ <> '*'"  
+          cQry += " AND E1_FILIAL  = '" + xFilial("SE1") + "'"
+          cQry += " AND E1_PREFIXO = '" + cSerieNF + "'"
+          cQry += " AND E1_NUM IN " + cNotasIN + " "
           IF Select(_cAlias) <> 0
             (_cAlias)->(DbCloseArea())
           EndIf
           dbUseArea(.T.,"TOPCONN",TcGenQry(,,cQry),_cAlias,.T.,.T.)
           While (_cAlias)->(!EoF())
-            aTitAux := {}
-            aAdd(aTitAux ,{ {"E1_FILIAL" , (_cAlias)->E1_FILIAL},;
+            aAdd(aTitBord ,{ {"E1_FILIAL" , (_cAlias)->E1_FILIAL},;
                             {"E1_PREFIXO", (_cAlias)->E1_PREFIXO},;
                             {"E1_NUM"    , (_cAlias)->E1_NUM},;
                             {"E1_PARCELA", (_cAlias)->E1_PARCELA},;
                             {"E1_TIPO"   , (_cAlias)->E1_TIPO} })
-            aAdd(aTitBord,aTitAux)
           (_cAlias)->(DbSkip())
           End
           IF Select(_cAlias) <> 0
@@ -106,13 +116,97 @@ Default cIdsNfe   := ""
         //--------------------------------------------------------------------------------
         //Gera o borderô automaticamente para emissão do boleto online
         If Len(aTitBord) > 0
-          FWMsgRun(, {|oSay| fnGerBor(oSay) }, "Aguarde...", "Gerando o(s) Boleto(s)")
+          FWMsgRun(, {|| fnGerBor() }, "Aguarde...", "Gerando o(s) Boleto(s)")
         EndIF 
         //--------------------------------------------------------------------------------
       EndIF
     EndIF
   EndIF
   
+  FWRestArea(aArea)
+Return
+
+// -----------------------------------------
+/*/ Função zGerDanfe
+
+  Gera a DANFE da Nota Fiscal.
+
+  @author Totvs Nordeste
+  Return
+/*/
+// -----------------------------------------
+Static Function zGerDanfe()
+Local aArea     := FWGetArea()
+Local cArquivo  := ""
+Local cArqPDF   := ""
+Local oDanfe    := Nil
+Local lExistNFe := .F.
+Local nTamNota  := TamSX3('F2_DOC')[1]
+Local nTamSerie := TamSX3('F2_SERIE')[1]
+Local cBarra    := IIF(IsSrvUnix(),"/","\")
+Local cDirSer   := cBarra+"spool"+cBarra
+Local cDirLoc   := GetTempPath(.T.,.F.)
+Local cProg		  := IIF(ExistBlock("DANFEProc"),"U_DANFEProc","DANFEProc")
+
+Private PixelX
+Private PixelY
+Private nConsNeg
+Private nConsTex
+Private oRetNF
+Private nColAux
+       
+  //Se existir nota
+  If !Empty(cNotaIni) .AND. !Empty(cNotaFin)
+           
+    cArquivo := cNotaIni+cNotaFin + "_" + FWTimeStamp()
+           
+    //Define as perguntas da DANFE
+    Pergunte("NFSIGW",.F.)
+    MV_PAR01 := PadR(cNotaIni,  nTamNota)   //Nota Inicial
+    MV_PAR02 := PadR(cNotaFin,  nTamNota)   //Nota Final
+    MV_PAR03 := PadR(cSerDanfe, nTamSerie)  //Série da Nota
+    MV_PAR04 := 2                           //NF de Saida
+    MV_PAR05 := 1                           //Frente e Verso = Sim
+    MV_PAR06 := 2                           //DANFE simplificado = Nao
+    MV_PAR07 := MonthSub(dDataBase, 1)      //Data De
+    MV_PAR08 := MonthSum(dDataBase, 1)      //Data Até
+           
+    oDanfe := FWMSPrinter():New(cArquivo, IMP_PDF, .F., , .T.)
+           
+    oDanfe:SetResolution(78)
+    oDanfe:SetPortrait()
+    oDanfe:SetPaperSize(DMPAPER_A4)
+    oDanfe:SetMargin(60, 60, 60, 60)
+           
+    //Força a impressão em PDF
+    oDanfe:nDevice  := 6
+    oDanfe:cPathPDF := cDirSer                
+    oDanfe:lServer  := .F.
+    oDanfe:lViewPDF := .F.
+           
+    PixelX    := oDanfe:nLogPixelX()
+    PixelY    := oDanfe:nLogPixelY()
+    nConsNeg  := 0.4
+    nConsTex  := 0.5
+    oRetNF    := Nil
+    nColAux   := 0
+    
+    oDanfe:lInJob := .T.
+
+    //Chamando a impressão da danfe no RDMAKE
+    &cProg.(@oDanfe, , cIDEnt, Nil, Nil, @lExistNFe, .F./*lIsLoja*/)
+		If lExistNFe
+      oDanfe:Preview()
+      cArqPDF := cArquivo+".pdf"
+		  If !(__CopyFile(cDirSer+cArqPDF, cDirLoc+cArqPDF))
+        MsgStop("Erro na criação do arquivo " + cArqPDF + ", por favor tente novamente!", "Atenção")
+      Else
+        ShellExecute( "Open", cDirLoc+cArqPDF , "/RUN /TN SPARK", cDirLoc , 1 )
+        FErase(cDirSer+cArqPDF)
+      EndIF
+    EndIF
+  EndIf
+       
   FWRestArea(aArea)
 Return
 
@@ -125,7 +219,7 @@ Return
   Return
 /*/
 // -----------------------------------------
-Static Function fnGerBor(nY)
+Static Function fnGerBor()
 Local cEspec  := ""
 Local aRegBor := {}
   
@@ -162,9 +256,9 @@ Private cNumBor        := ""
   If lMsErroAuto
     MostraErro()
   Else
-    cNumBor := SEA->EA_NUMBOR
+    cNumBor := SE1->E1_NUMBOR
     F713Transf()
-    Sleep(5000)
+    Sleep(10000) //Aguarda 10 segundos antes de iniciar a impressão dos boletos
     BxBoleto()
   EndIf
 
@@ -177,41 +271,63 @@ Return
  *---------------------------------------------------------------------*/
  
 Static Function BxBoleto()
+Local aBolAut  := {}
 Local cBody    := ""
 Local oService := Nil
-Local cBase64  := ""
 Local cDirLoc  := GetTempPath(.T.,.F.)
 Local cBarra   := IIF(IsSrvUnix(),"/","\")
 Local cDirSer  := cBarra+"spool"+cBarra+"boletos"+cBarra+cEmpAnt+cBarra
-Local aBoletos := {}
+Local nBolNot  := 0
 Local nY
 
   oService := gfin.api.banks.bills.BanksBillsService():New()
 
-  cBody := '{ "bills": [ '
-
+  DBSelectArea("SEA")
+  SEA->(DBSetOrder(1))
   For nY := 1 To Len(aTitBord)
-    cBody += '{' +;
-      '"ea_filial": "'  + aTitBord[nY][1] +'",' + ;
-      '"ea_numbor": "'  + cNumBor         +'",' + ;
-      '"ea_prefixo": "' + aTitBord[nY][2] +'",' + ;
-      '"ea_num": "'     + aTitBord[nY][3] +'",' + ;
-      '"ea_parcela": "' + aTitBord[nY][4] +'",' + ;
-      '"ea_tipo": "'    + aTitBord[nY][5] +'"'  + ;
-      IIF(nY < Len(aBoletos),'},','}')
+    If SEA->(MSSeek(xFilial("SEA") + cNumBor + aTitBord[nY][2][2] + aTitBord[nY][3][2] + aTitBord[nY][4][2] + aTitBord[nY][5][2]))
+      If SEA->EA_TRANSF == "S"
+        aAdd(aBolAut,{aTitBord[nY][1][2],;
+                      aTitBord[nY][2][2],;
+                      aTitBord[nY][3][2],;
+                      aTitBord[nY][4][2],;
+                      aTitBord[nY][5][2]})
+      Else
+        ++nBolNot
+      EndIF
+    EndIF
   Next nY
 
+  If nBolNot == Len(aTitBord)
+    MsgAlert('Nenhum boleto foi autorizado, por favor verificar o status do(s) boleto(s) na opção "Outras Ações -> Boleto" ', "Boleto não autorizado")
+    Return
+  ElseIF nBolNot > 0
+    MsgAlert('Existe boleto(s) não autorizado(s), por favor verificar o status do boleto na opção "Outras Ações -> Boleto" ', "Boleto não autorizado")
+  EndIF
+  
+  cBody := '{ "bills": [ '
+  For nY := 1 To Len(aBolAut)
+    cBody += '{' +;
+          '"ea_filial": "'  + aBolAut[nY][1] +'",' + ;
+          '"ea_numbor": "'  + cNumBor        +'",' + ;
+          '"ea_prefixo": "' + aBolAut[nY][2] +'",' + ;
+          '"ea_num": "'     + aBolAut[nY][3] +'",' + ;
+          '"ea_parcela": "' + aBolAut[nY][4] +'",' + ;
+          '"ea_tipo": "'    + aBolAut[nY][5] +'"'  + ;
+          IIF(nY < Len(aBolAut),'},','}')
+  Next nY
   cBody += ']}'
 
   oService:downloadPdf(cBody, .T.)
   If oService:lOk
-    cBase64 := oService:cFilePDF
     If !(__CopyFile(cDirSer+oService:cPathPDF, cDirLoc+"\"+oService:cPathPDF))
       MsgStop("Erro na criação do arquivo " + oService:cPathPDF + ", por favor tente novamente!", "Atenção")
     Else
       ShellExecute( "Open", cDirLoc+"\"+oService:cPathPDF , "/RUN /TN SPARK", cDirLoc , 1 )
       FErase(cDirSer+oService:cPathPDF)
     EndIF
+  Else
+    MsgStop('Ocorreu um erro na impressão automatica do(s) boleto(s), por favor realize a impressão através da opção "Outras Ações -> Boleto" ', "Impressão de Boleto")
   End
 
 Return

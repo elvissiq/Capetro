@@ -11,12 +11,11 @@
 User function FISENVNFE()
 Local aArea    := FWGetArea()
 Local aIdNfe   := PARAMIXB[1]
-Local aBankBol := StrTokArr(SuperGetMV("MV_XBANKBO",.F.,""),"/")
 Local cSerieNF := ""
 Local cIdsNfe  := ""
 Local nY 
 
-  IF !Empty(aIdNfe) .AND. !Empty(aBankBol)
+  IF !Empty(aIdNfe)
     For nY := 1 To Len(aIdNfe)
         If Empty(cIdsNfe)
             cSerieNF := SubSTR(aIdNfe[nY],1,3)
@@ -25,7 +24,7 @@ Local nY
             cIdsNfe += "/"+SubSTR(aIdNfe[nY],4)
         EndIF
     Next nY
-    u_fnGerBol(cSerieNF,cIdsNfe) //Função que irá gerar os boletos
+    u_fnNFeBol(cSerieNF,cIdsNfe) //Função que irá gerar os boletos
   EndIF
 
   FWRestArea(aArea)

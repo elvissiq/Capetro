@@ -156,6 +156,7 @@ Private cProdutos := ""
 		//ProcessMessages()
         
         If !Empty((_cAlias)->F1_DOC) .AND. !Empty((_cAlias)->F1_SERIE)
+            cProdutos := ""
             fnItemNF()
         Else
             cProdutos := "     "
