@@ -24,7 +24,9 @@ Local nY
             cIdsNfe += "/"+SubSTR(aIdNfe[nY],4)
         EndIF
     Next nY
-    u_fnNFeBol(cSerieNF,cIdsNfe) //Função que irá gerar os boletos
+    If ExistBlock("XFAT001")
+      U_XFAT001(cSerieNF,cIdsNfe) //Função que irá gerar os boletos
+    EndIF
   EndIF
 
   FWRestArea(aArea)

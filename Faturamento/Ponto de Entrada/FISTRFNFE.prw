@@ -10,6 +10,6 @@
 
 User Function FISTRFNFE()
 	
-	aadd(aRotina,{'Boleto','U_PFAT007' , 0 , 2,0,NIL})
+	aadd(aRotina,{'Boleto Bancario','U_XFAT002' , 0 , 2,0,NIL})
 
 Return

@@ -21,6 +21,7 @@ Relatório de Contas a Pagar Customizado
 @since 05/03/2026
 @Historico
 	05/03/2026 - Desenvolvimento do relatório (Elvis Siqueira)
+    13/03/2026 - Acrescentado o filtro de Vencimento (Elvis Siqueira)
 /*/
 User Function CFINR01()
 Local aPergs      := {}
@@ -32,6 +33,8 @@ Local cCodFor     := Space(FWTamSX3("E2_FORNECE")[01])
 Local cLojFor     := Space(FWTamSX3("E2_LOJA")[01])
 Local dEmisDe     := CToD("")
 Local dEmisAt     := CToD("")
+Local dVencDe     := CToD("")
+Local dVencAt     := CToD("")
 Local dBaixaDe    := CToD("")
 Local dBaixaAt    := CToD("")
 Local nSelFil     := 2
@@ -44,6 +47,8 @@ Local nSelFil     := 2
 	aAdd(aPergs, {1, "Loja"				, cLojFor   , "", ".T.", ""	, ".T.", 80,  .F.})
 	aAdd(aPergs, {1, "Emissão De"		, dEmisDe   , "", ".T.", ""	, ".T.", 80,  .F.})
 	aAdd(aPergs, {1, "Emissão Até"		, dEmisAt   , "", ".T.", ""	, ".T.", 80,  .F.})
+    aAdd(aPergs, {1, "Vencimento De"	, dVencDe   , "", ".T.", ""	, ".T.", 80,  .F.})
+	aAdd(aPergs, {1, "Vencimento Até"	, dVencAt   , "", ".T.", ""	, ".T.", 80,  .F.})
     aAdd(aPergs, {1, "Dt da Baixa De"	, dBaixaDe  , "", ".T.", ""	, ".T.", 80,  .F.})
 	aAdd(aPergs, {1, "Dt da Baixa Ate"	, dBaixaAt  , "", ".T.", ""	, ".T.", 80,  .F.})
     aAdd(aPergs, {2, "Seleciona Filial"	, nSelFil   , {"1=Sim", "2=Não"}, 80, ".T.", .F.})
@@ -73,10 +78,10 @@ Local nY
 Private _cAlias   := GetNextAlias()
 Private cProdutos := "" 
 
-    If ValType(MV_PAR11) == "C"
-        MV_PAR11 := Val(MV_PAR11)
+    If ValType(MV_PAR13) == "C"
+        MV_PAR13 := Val(MV_PAR13)
     EndIf 
-    If MV_PAR11 == 1
+    If MV_PAR13 == 1
         aListFilial := FwListBranches()
         For nY := 1 To Len(aListFilial)
             If aListFilial[nY][1]
@@ -108,7 +113,10 @@ Private cProdutos := ""
 	cQry += " 	AND SE2.E2_EMISSAO BETWEEN '" + DtoS(MV_PAR07) + "' AND '" + DtoS(MV_PAR08) + "'"
 	EndIF
     If !Empty(MV_PAR09) .AND. !Empty(MV_PAR10)
-	cQry += " 	AND SE2.E2_BAIXA BETWEEN '" + DtoS(MV_PAR09) + "' AND '" + DtoS(MV_PAR10) + "'"
+	cQry += " 	AND SE2.E2_VENCREA BETWEEN '" + DtoS(MV_PAR09) + "' AND '" + DtoS(MV_PAR10) + "'"
+	EndIF
+    If !Empty(MV_PAR11) .AND. !Empty(MV_PAR12)
+	cQry += " 	AND SE2.E2_BAIXA BETWEEN '" + DtoS(MV_PAR11) + "' AND '" + DtoS(MV_PAR12) + "'"
 	EndIF
 	cQry += " ORDER BY SE2.E2_FILIAL, SE2.E2_FORNECE, SE2.E2_LOJA, SE2.E2_EMISSAO, SE2.E2_PREFIXO, SE2.E2_NUM "
 	cQry := ChangeQuery(cQry)

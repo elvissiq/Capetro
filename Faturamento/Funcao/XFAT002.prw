@@ -6,32 +6,31 @@
 #Include "FWPrintSetup.ch" 
 
 //----------------------------------------------------------------------
-/*/{PROTHEUS.DOC} PFAT007
-FUNÇÃO PFAT007 - Tela para impressão dos boletos
+/*/{PROTHEUS.DOC} XFAT002
+FUNÇÃO XFAT002 - Tela para impressão dos boletos
 @VERSION PROTHEUS 12
-@SINCE 11/03/2026
+@SINCE 13/03/2026
 /*/
 //----------------------------------------------------------------------
 
-User Function PFAT007()
-Local oDialog, oPanel, oTabTMP
-Local cAliasQry := GetNextAlias()
+User Function XFAT002()
+Local oDialog, oPanel
 Local cMarca    := "X"
 Local aColsBrw  := {}
 Local aColsSX3  := {}
 Local aFields   := {}
 Local aPergs    := {}
 Local aSeek     := {}
+Local aBkpParam := NgSalvaMvPa()
 Local cCarga    := Space(FWTamSX3("DAK_COD")[1])
 Local cSerieNF  := Space(FWTamSX3("F2_SERIE")[1])
 Local cNotaDe   := Space(FWTamSX3("F2_DOC")[1])
 Local cNotaAte  := Space(FWTamSX3("F2_DOC")[1])
 Local dDtDe     := CtoD("//")
 Local dDtAte    := CtoD("//")
-Local _cQry     := ""
 Local nY
 
-Private oMarkBrowse
+Private oTabTMP, oMarkBrowse
 Private cAliasBrw := GetNextAlias()
 Private aRotina := {}
 
@@ -47,9 +46,11 @@ Private aRotina := {}
     If ParamBox(aPergs, "Informe as Perguntas")
         If Empty(MV_PAR01) .And. ( (Empty(MV_PAR02) .And. Empty(MV_PAR04)) )
             ApMsgAlert("Filtro incorreto", "Aviso")
+            NgRetAuMVPa(aBkpParam)
             Return
         EndIF
     Else
+        NgRetAuMVPa(aBkpParam)
         Return
     EndIf
 
@@ -77,14 +78,11 @@ Private aRotina := {}
     aAdd(aFields, {'TP_TRANSF' ,"C",FWTamSX3("EA_TRANSF")[1]    ,FWTamSX3("EA_TRANSF")[2]	,"Status Trans"	,"",""})
 
     oTabTMP:SetFields(aFields)
-    oTabTMP:AddIndex("1", {"TP_NUMBOR"} )
-    oTabTMP:AddIndex("2", {"TP_PORTADO"} )
-    oTabTMP:AddIndex("3", {"TP_AGEDEP"} )
-    oTabTMP:AddIndex("4", {"TP_NUMCON"} )
-    oTabTMP:AddIndex("5", {"TP_NUM"} )
-    oTabTMP:AddIndex("6", {"TP_PARCELA"} )
-    oTabTMP:AddIndex("7", {"TP_TIPO"} )
-    oTabTMP:AddIndex("8", {"TP_TRANSF"} )
+    oTabTMP:AddIndex("1", {"TP_FILIAL","TP_PREFIXO","TP_NUM","TP_PARCELA","TP_TIPO"} )
+    oTabTMP:AddIndex("2", {"TP_FILIAL","TP_NUMBOR","TP_PORTADO","TP_AGEDEP","TP_NUMCON"} )
+    oTabTMP:AddIndex("3", {"TP_FILIAL","TP_NUMBOR","TP_PREFIXO","TP_NUM","TP_PARCELA","TP_TIPO"} )
+    oTabTMP:AddIndex("4", {"TP_FILIAL","TP_NUMBOR","TP_PORTADO","TP_AGEDEP","TP_NUMCON","TP_PREFIXO","TP_NUM","TP_PARCELA","TP_TIPO"} )
+    oTabTMP:AddIndex("5", {"TP_TRANSF"} )
     oTabTMP:Create()
 
     For nY := 3 To Len(aFields)
@@ -97,78 +95,18 @@ Private aRotina := {}
                     } } )
     Next 
 
-    IF !Empty(MV_PAR01)
-        _cQry := " SELECT SEA.EA_FILIAL,SEA.EA_PREFIXO,SEA.EA_NUM,SEA.EA_PARCELA,SEA.EA_TIPO,SEA.EA_PORTADO,SEA.EA_AGEDEP, "
-        _cQry += "        SEA.EA_NUMCON,SEA.EA_NUMBOR,SEA.EA_TRANSF,SEA.EA_APIMSG "
-        _cQry += " FROM "+ RetSqlName("SF2") + " SF2 "
-        _cQry += " INNER JOIN " + RetSqlName("SEA") + " SEA On SEA.EA_PREFIXO = SF2.F2_SERIE AND SEA.EA_NUM = SF2.F2_DOC "
-        _cQry += " INNER JOIN " + RetSqlName("DAK") + " DAK On DAK.DAK_COD = SF2.F2_CARGA "
-        _cQry += " WHERE   SF2.D_E_L_E_T_ <> '*'"
-        _cQry += "     AND DAK.D_E_L_E_T_ <> '*'"
-        _cQry += "     AND SEA.D_E_L_E_T_ <> '*'"
-        _cQry += "     AND SF2.F2_FILIAL  = '" + xFilial("SF2") + "'"
-        _cQry += "     AND DAK.DAK_FILIAL = '" + xFilial("DAK") + "'"
-        _cQry += "     AND SEA.EA_FILIAL  = '" + xFilial("SEA") + "'"
-        _cQry += "     AND SEA.EA_CART    = 'R'"
-        _cQry += "     AND SEA.EA_BORAPI  = 'S'"
-        If !Empty(MV_PAR05) .And. !Empty(MV_PAR06)
-        _cQry += "     AND SEA.EA_DATABOR BETWEEN '" + DToS(MV_PAR05) + "' AND '" + DToS(MV_PAR06) + "' "
-        EndIF 
-        _cQry += "     AND DAK.DAK_COD    = '" + MV_PAR01 + "'"
-    ElseIF !Empty(MV_PAR02) .And. !Empty(MV_PAR04)
-        _cQry := " SELECT SEA.EA_FILIAL,SEA.EA_PREFIXO,SEA.EA_NUM,SEA.EA_PARCELA,SEA.EA_TIPO,SEA.EA_PORTADO,SEA.EA_AGEDEP, "
-        _cQry += "        SEA.EA_NUMCON,SEA.EA_NUMBOR,SEA.EA_TRANSF,SEA.EA_APIMSG "
-        _cQry += " FROM "+ RetSqlName("SEA") + " SEA "
-        _cQry += " WHERE SEA.D_E_L_E_T_ <> '*' "
-        _cQry += "   AND SEA.EA_FILIAL  = '"+xFilial('SEA')+"' "
-        _cQry += "   AND SEA.EA_PREFIXO = '"+MV_PAR02+"' "
-        _cQry += "   AND SEA.EA_NUM BETWEEN '"+MV_PAR03+"' AND '"+MV_PAR04+"' "
-        _cQry += "   AND SEA.EA_CART    = 'R'"
-        _cQry += "   AND SEA.EA_BORAPI  = 'S'"
-        If !Empty(MV_PAR05) .And. !Empty(MV_PAR06)
-        _cQry += "     AND SEA.EA_DATABOR BETWEEN '" + DToS(MV_PAR05) + "' AND '" + DToS(MV_PAR06) + "' "
-        EndIF
-        _cQry += " ORDER BY EA_PREFIXO, EA_NUM, EA_PARCELA "
-    EndIF 
-    If Empty(_cQry)
-        FWAlertInfo("Filtro incorreto!","Filtro")
-        Return
-    EndIF 
-    _cQry := ChangeQuery(_cQry)
-    IF Select(cAliasQry) <> 0
-        (cAliasQry)->(DbCloseArea())
-    EndIf
-    dbUseArea(.T.,"TOPCONN",TcGenQry(,,_cQry),cAliasQry,.T.,.T.)
-    (cAliasQry)->(DBGoTop())
-
-    While !(cAliasQry)->(Eof())
-            RecLock(cAliasBrw,.T.)
-                (cAliasBrw)->TP_FILIAL  := (cAliasQry)->EA_FILIAL
-                (cAliasBrw)->TP_NUMBOR  := (cAliasQry)->EA_NUMBOR
-                (cAliasBrw)->TP_PORTADO := (cAliasQry)->EA_PORTADO
-                (cAliasBrw)->TP_AGEDEP  := (cAliasQry)->EA_AGEDEP
-                (cAliasBrw)->TP_NUMCON  := (cAliasQry)->EA_NUMCON 
-                (cAliasBrw)->TP_PREFIXO := (cAliasQry)->EA_PREFIXO
-                (cAliasBrw)->TP_NUM     := (cAliasQry)->EA_NUM
-                (cAliasBrw)->TP_PARCELA := (cAliasQry)->EA_PARCELA
-                (cAliasBrw)->TP_TIPO    := (cAliasQry)->EA_TIPO
-                (cAliasBrw)->TP_TRANSF  := (cAliasQry)->EA_TRANSF 
-            MsUnlock(cAliasBrw)
-		(cAliasQry)->(DbSkip())
-	EndDo
-	(cAliasQry)->(DbCloseArea())
-	(cAliasBrw)->(DbGoTop())
+    U_fDadosTab() //Função que irá alimentar os dados da tabela temporaria
 
     oDialog := FWDialogModal():New()
     oDialog:SetBackground( .T. ) 
-    oDialog:SetTitle( 'Boletos Emitidos' )
-    oDialog:SetSize( 280, 500 )
+    oDialog:SetTitle( 'Boleto Bancario' )
+    oDialog:SetSize( 280, 800 )
     oDialog:EnableFormBar( .T. )
     oDialog:SetCloseButton( .T. )
     oDialog:SetEscClose( .T. )
     oDialog:CreateDialog()
     oDialog:CreateFormBar()
-    oDialog:AddButton('Imprimir' , { || FWMsgRun(Nil, {|| BxBoleto()}, "Aguarde...", "Gerando PDF...") },,2,0)
+    oDialog:AddButton('Imprimir' , { || FWMsgRun(Nil, {|| BxBoleto()}, "Aguarde...", "Imprimindo Boleto...") },,2,0)
 
     oPanel := oDialog:GetPanelMain()
         oMarkBrowse:= FWMarkBrowse():New()
@@ -188,7 +126,7 @@ Private aRotina := {}
         oMarkBrowse:SetSeek(.T.,aSeek)
         oMarkBrowse:SetAmbiente(.F.)
         oMarkBrowse:SetUseFilter(.T.)
-        oMarkBrowse:SetMenuDef("PFAT007")
+        oMarkBrowse:SetMenuDef("XFAT002")
         oMarkBrowse:SetOwner(oPanel)
         oMarkBrowse:DisableReport()
         oMarkBrowse:DisableDetails()
@@ -197,6 +135,7 @@ Private aRotina := {}
 
 	oTabTMP:Delete()
     oMarkBrowse:DeActivate()
+    NgRetAuMVPa(aBkpParam)
 
 Return
 
@@ -208,8 +147,83 @@ Return
  
 Static Function MenuDef()
 Local aRotina := {}
+
+ADD OPTION aRotina TITLE 'Gerar Boleto' ACTION 'U_GeraBol()' OPERATION 3 ACCESS 0 //OPERATION 3
     
 Return aRotina
+
+/*---------------------------------------------------------------------*
+ | Func:  fDadosTab                                                    |
+ | Desc:  Função que irá alimentar os dados da tabela temporaria       |
+ | Obs.:  /                                                            |
+ *---------------------------------------------------------------------*/
+ 
+User Function fDadosTab()
+Local _cQry     := ""
+Local cAliasQry := GetNextAlias()
+
+    IF !Empty(MV_PAR01)
+        _cQry := " SELECT SEA.EA_FILIAL,SEA.EA_PREFIXO,SEA.EA_NUM,SEA.EA_PARCELA,SEA.EA_TIPO,SEA.EA_PORTADO,SEA.EA_AGEDEP, "
+        _cQry += "        SEA.EA_NUMCON,SEA.EA_NUMBOR,SEA.EA_TRANSF,SEA.EA_APIMSG "
+        _cQry += " FROM "+ RetSqlName("SF2") + " SF2 "
+        _cQry += " INNER JOIN " + RetSqlName("SEA") + " SEA On SEA.EA_PREFIXO = SF2.F2_SERIE AND SEA.EA_NUM = SF2.F2_DOC "
+        _cQry += " INNER JOIN " + RetSqlName("DAK") + " DAK On DAK.DAK_COD = SF2.F2_CARGA "
+        _cQry += " WHERE   SF2.D_E_L_E_T_ <> '*'"
+        _cQry += "     AND DAK.D_E_L_E_T_ <> '*'"
+        _cQry += "     AND SEA.D_E_L_E_T_ <> '*'"
+        _cQry += "     AND SF2.F2_FILIAL  = '" + xFilial("SF2") + "'"
+        _cQry += "     AND DAK.DAK_FILIAL = '" + xFilial("DAK") + "'"
+        _cQry += "     AND SEA.EA_FILIAL  = '" + xFilial("SEA") + "'"
+        _cQry += "     AND SEA.EA_CART    = 'R'"
+        _cQry += "     AND SEA.EA_BORAPI  = 'S'"
+        If !Empty(MV_PAR05) .And. !Empty(MV_PAR06)
+        _cQry += "     AND SEA.EA_DATABOR BETWEEN '" + DToS(MV_PAR05) + "' AND '" + DToS(MV_PAR06) + "' "
+        EndIF 
+        _cQry += "     AND DAK.DAK_COD    = '" + MV_PAR01 + "'"
+        _cQry += " ORDER BY SEA.EA_PREFIXO, SEA.EA_NUM, SEA.EA_PARCELA "
+    ElseIF !Empty(MV_PAR02) .And. !Empty(MV_PAR04)
+        _cQry := " SELECT SEA.EA_FILIAL,SEA.EA_PREFIXO,SEA.EA_NUM,SEA.EA_PARCELA,SEA.EA_TIPO,SEA.EA_PORTADO,SEA.EA_AGEDEP, "
+        _cQry += "        SEA.EA_NUMCON,SEA.EA_NUMBOR,SEA.EA_TRANSF,SEA.EA_APIMSG "
+        _cQry += " FROM "+ RetSqlName("SEA") + " SEA "
+        _cQry += " WHERE SEA.D_E_L_E_T_ <> '*' "
+        _cQry += "   AND SEA.EA_FILIAL  = '"+xFilial('SEA')+"' "
+        _cQry += "   AND SEA.EA_PREFIXO = '"+MV_PAR02+"' "
+        _cQry += "   AND SEA.EA_NUM BETWEEN '"+MV_PAR03+"' AND '"+MV_PAR04+"' "
+        _cQry += "   AND SEA.EA_CART    = 'R'"
+        _cQry += "   AND SEA.EA_BORAPI  = 'S'"
+        If !Empty(MV_PAR05) .And. !Empty(MV_PAR06)
+        _cQry += "     AND SEA.EA_DATABOR BETWEEN '" + DToS(MV_PAR05) + "' AND '" + DToS(MV_PAR06) + "' "
+        EndIF
+        _cQry += " ORDER BY SEA.EA_PREFIXO, SEA.EA_NUM, SEA.EA_PARCELA "
+    EndIF
+    _cQry := ChangeQuery(_cQry)
+    IF Select(cAliasQry) <> 0
+        (cAliasQry)->(DbCloseArea())
+    EndIf
+    dbUseArea(.T.,"TOPCONN",TcGenQry(,,_cQry),cAliasQry,.T.,.T.)
+    (cAliasQry)->(DBGoTop())
+    
+    oTabTMP:Zap() //Limpa todos os registros da tabela temporária cAliasBrw.
+    
+    While !(cAliasQry)->(Eof())
+        RecLock(cAliasBrw,.T.)
+            (cAliasBrw)->TP_FILIAL  := (cAliasQry)->EA_FILIAL
+            (cAliasBrw)->TP_NUMBOR  := (cAliasQry)->EA_NUMBOR
+            (cAliasBrw)->TP_PORTADO := (cAliasQry)->EA_PORTADO
+            (cAliasBrw)->TP_AGEDEP  := (cAliasQry)->EA_AGEDEP
+            (cAliasBrw)->TP_NUMCON  := (cAliasQry)->EA_NUMCON 
+            (cAliasBrw)->TP_PREFIXO := (cAliasQry)->EA_PREFIXO
+            (cAliasBrw)->TP_NUM     := (cAliasQry)->EA_NUM
+            (cAliasBrw)->TP_PARCELA := (cAliasQry)->EA_PARCELA
+            (cAliasBrw)->TP_TIPO    := (cAliasQry)->EA_TIPO
+            (cAliasBrw)->TP_TRANSF  := (cAliasQry)->EA_TRANSF 
+        MsUnlock(cAliasBrw)
+	(cAliasQry)->(DbSkip())
+	EndDo
+	(cAliasQry)->(DbCloseArea())
+	(cAliasBrw)->(DbGoTop())
+    
+Return
 
 /*---------------------------------------------------------------------*
  | Func:  AllMark                                                      |
@@ -360,5 +374,63 @@ Local aAreaSEA := SEA->(FWGetArea())
 
     FWRestArea(aAreaSEA)
     FWRestArea(aArea)
+
+Return
+
+/*---------------------------------------------------------------------*
+ | Func:  GeraBol                                                      |
+ | Desc:  Realiza a geração dos boletos                                |
+ | Obs.:  /                                                            |
+ *---------------------------------------------------------------------*/
+User Function GeraBol()
+Local _cQry     := ""
+Local cAliasQry := GetNextAlias()
+Local aIdNfe    := {}
+Local aBkpParGr := NgSalvaMvPa()
+Local cIdsNfe   := ""
+Local nY
+
+    _cQry := "SELECT SF2.F2_SERIE, SF2.F2_DOC FROM "+ RetSqlName("SF2") + " SF2 "
+    _cQry += "WHERE  SF2.D_E_L_E_T_ <> '*'"
+    _cQry += "   AND SF2.F2_FILIAL  = '" + xFilial("SF2") + "'"
+    If !Empty(MV_PAR01)
+        _cQry += "   AND SF2.F2_CARGA = '" + MV_PAR01 + "'"
+    Else
+        _cQry += "   AND SF2.F2_SERIE = '" + MV_PAR02 + "'"
+        _cQry += "   AND SF2.F2_DOC BETWEEN '" + MV_PAR03 + "' AND '" + MV_PAR04 + "'"
+    EndIF
+    If !Empty(MV_PAR05) .AND. !Empty(MV_PAR06)
+        _cQry += "   AND SF2.F2_EMISSAO BETWEEN '" + DToS(MV_PAR05) + "' AND '" + DToS(MV_PAR06) + "'"
+    EndIF
+    _cQry := ChangeQuery(_cQry)
+    IF Select(cAliasQry) <> 0
+        (cAliasQry)->(DbCloseArea())
+    EndIf
+    dbUseArea(.T.,"TOPCONN",TcGenQry(,,_cQry),cAliasQry,.T.,.T.)
+
+    While !(cAliasQry)->(Eof())
+        aAdd(aIdNfe,(cAliasQry)->F2_SERIE + (cAliasQry)->F2_DOC)
+		(cAliasQry)->(DbSkip())
+	EndDo
+	(cAliasQry)->(DbCloseArea())
+    
+    If !Empty(aIdNfe)
+        For nY := 1 To Len(aIdNfe)
+            If Empty(cIdsNfe)
+                cSerieNF := SubSTR(aIdNfe[nY],1,3)
+                cIdsNfe  += SubSTR(aIdNfe[nY],4)
+            Else
+                cIdsNfe += "/"+SubSTR(aIdNfe[nY],4)
+            EndIF
+        Next nY
+        If ExistBlock("XFAT001")
+            FWMsgRun(, {|| U_XFAT001(cSerieNF,cIdsNfe) }, "Aguarde...", "Gerando o(s) Boleto(s)") //Função que irá gerar os boletos
+            NgRetAuMVPa(aBkpParGr)
+            U_fDadosTab()
+            oMarkBrowse:Refresh(.T.)
+        Else
+            MsgAlert("A função U_XFAT001 não está compilada no RPO - Repositorio de Objetos","Função XFAT001")
+        EndIF
+    EndIF
 
 Return

@@ -7,16 +7,17 @@
 #Include "FWPrintSetup.ch"
 
 // ---------------------------------------------------------------------------
-/*/ Rotina fnNFeBol
+/*/ Rotina XFAT001
   Função responsável por gerar a DANFE e o Boleto da Nota Fiscal.
   Retorno
   @historia
-  11/03/2026 - Desenvolvimento da Rotina.
+  13/03/2026 - Desenvolvimento da Rotina.
 /*/
 // ---------------------------------------------------------------------------
-User Function fnNFeBol(cSerieNF,cIdsNfe)
+User Function XFAT001(cSerieNF,cIdsNfe)
 Local aArea       := FWGetArea()
 Local aBankBol    := StrTokArr(SuperGetMV("MV_XBANKBO",.F.,""),"/")
+Local cFormPag    := SuperGetMV("MV_XFORMBO",.F.,"BOL")
 Local cNotasIN    := ""
 Local cQry        := ""
 Local _cAlias     := ""
@@ -46,7 +47,7 @@ Default cIdsNfe   := ""
   aParam    := Array(5)
   aParam[1] := cSerieNF
   aParam[2] := SubSTR(cIdsNfe,1,9)
-  aParam[3] := SubSTR(cIdsNfe,Len(cIdsNfe)-9)
+  aParam[3] := SubSTR(cIdsNfe,Len(cIdsNfe)-8)
   aParam[4] := MonthSub(dDataBase, 1)
   aParam[5] := MonthSum(dDataBase, 1)
 
@@ -77,8 +78,10 @@ Default cIdsNfe   := ""
     Next nY
     cNotasIN := FormatIN(cNotasIN,"/")
 
-    zGerDanfe() //Gera a DANFE da Nota Fiscal          
-          
+    If !FWIsInCallStack("U_GeraBol")
+      zGerDanfe() //Gera a DANFE da Nota Fiscal          
+    EndIF
+
     If Len(cNotasIN) > 0 .AND. Len(aBankBol) >= 4
       DBSelectArea("SA6")
       SA6->(DBSetOrder(1))
@@ -91,21 +94,27 @@ Default cIdsNfe   := ""
                 
           _cAlias := FWTimeStamp()
 
-          cQry := "SELECT E1_FILIAL, E1_PREFIXO, E1_NUM, E1_PARCELA, E1_TIPO FROM " + RetSQLName('SE1') + " "
-          cQry += " WHERE D_E_L_E_T_ <> '*'"  
-          cQry += " AND E1_FILIAL  = '" + xFilial("SE1") + "'"
-          cQry += " AND E1_PREFIXO = '" + cSerieNF + "'"
-          cQry += " AND E1_NUM IN " + cNotasIN + " "
+          cQry := " SELECT SE1.E1_FILIAL, SE1.E1_PREFIXO, SE1.E1_NUM, SE1.E1_PARCELA, SE1.E1_TIPO, SE4.E4_FORMA FROM " + RetSQLName('SE1') + " SE1 "
+          cQry += " LEFT JOIN " + RetSQLName('SF2') + " SF2 ON SF2.F2_FILIAL = SE1.E1_FILIAL AND SF2.F2_SERIE = SE1.E1_PREFIXO AND SF2.F2_DOC = SE1.E1_NUM "
+          cQry += " AND SF2.F2_CLIENTE = SE1.E1_CLIENTE AND SF2.F2_LOJA = SE1.E1_LOJA AND SF2.D_E_L_E_T_ <> '*' "
+          cQry += " LEFT JOIN " + RetSQLName('SE4') + " SE4 ON SE4.E4_FILIAL = '" + xFilial("SE4") + "' AND SE4.E4_CODIGO = SF2.F2_COND AND SE4.D_E_L_E_T_ <> '*' "
+          cQry += " WHERE SE1.D_E_L_E_T_ <> '*'"
+          cQry += " AND SE1.E1_FILIAL  = '" + xFilial("SE1") + "'"
+          cQry += " AND SE1.E1_PREFIXO = '" + cSerieNF + "'"
+          cQry += " AND SE1.E1_NUM IN " + cNotasIN + " "
+          cQry += " AND SE1.E1_NUMBOR = '' "
           IF Select(_cAlias) <> 0
             (_cAlias)->(DbCloseArea())
           EndIf
           dbUseArea(.T.,"TOPCONN",TcGenQry(,,cQry),_cAlias,.T.,.T.)
           While (_cAlias)->(!EoF())
-            aAdd(aTitBord ,{ {"E1_FILIAL" , (_cAlias)->E1_FILIAL},;
+            If Alltrim((_cAlias)->E4_FORMA) $ (cFormPag)
+            aAdd(aTitBord ,{{"E1_FILIAL" , (_cAlias)->E1_FILIAL},;
                             {"E1_PREFIXO", (_cAlias)->E1_PREFIXO},;
                             {"E1_NUM"    , (_cAlias)->E1_NUM},;
                             {"E1_PARCELA", (_cAlias)->E1_PARCELA},;
                             {"E1_TIPO"   , (_cAlias)->E1_TIPO} })
+            EndIF
           (_cAlias)->(DbSkip())
           End
           IF Select(_cAlias) <> 0
@@ -176,11 +185,11 @@ Private nColAux
     oDanfe:SetResolution(78)
     oDanfe:SetPortrait()
     oDanfe:SetPaperSize(DMPAPER_A4)
-    oDanfe:SetMargin(60, 60, 60, 60)
+    oDanfe:SetMargin(40, 40, 40, 40)
            
     //Força a impressão em PDF
     oDanfe:nDevice  := 6
-    oDanfe:cPathPDF := cDirSer                
+    oDanfe:cPathPDF := cDirSer
     oDanfe:lServer  := .F.
     oDanfe:lViewPDF := .F.
            
@@ -259,7 +268,9 @@ Private cNumBor        := ""
     cNumBor := SE1->E1_NUMBOR
     F713Transf()
     Sleep(10000) //Aguarda 10 segundos antes de iniciar a impressão dos boletos
-    BxBoleto()
+    If !FWIsInCallStack("U_GeraBol")
+      BxBoleto()
+    EndIF
   EndIf
 
 Return
