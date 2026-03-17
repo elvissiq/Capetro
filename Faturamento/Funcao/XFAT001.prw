@@ -11,7 +11,7 @@
   Função responsável por gerar a DANFE e o Boleto da Nota Fiscal.
   Retorno
   @historia
-  13/03/2026 - Desenvolvimento da Rotina.
+  17/03/2026 - Desenvolvimento da Rotina.
 /*/
 // ---------------------------------------------------------------------------
 User Function XFAT001(cSerieNF,cIdsNfe)
@@ -86,7 +86,7 @@ Default cIdsNfe   := ""
       DBSelectArea("SA6")
       SA6->(DBSetOrder(1))
       If SA6->(MSSeek(xFilial("SA6") + PadR(aBankBol[1],FWTamSX3("A6_COD")[1]) + PadR(aBankBol[2],FWTamSX3("A6_AGENCIA")[1]) + PadR(aBankBol[3],FWTamSX3("A6_NUMCON")[1])))
-        If AllTrim(SA6->A6_CFGAPI) $ ('1,3')
+        If !Empty(SA6->A6_CFGAPI)
           cBank   := SA6->A6_COD
           cAgenc  := SA6->A6_AGENCIA
           cContCC := SA6->A6_NUMCON
@@ -103,6 +103,7 @@ Default cIdsNfe   := ""
           cQry += " AND SE1.E1_PREFIXO = '" + cSerieNF + "'"
           cQry += " AND SE1.E1_NUM IN " + cNotasIN + " "
           cQry += " AND SE1.E1_NUMBOR = '' "
+          cQry := ChangeQuery(cQry)
           IF Select(_cAlias) <> 0
             (_cAlias)->(DbCloseArea())
           EndIf
