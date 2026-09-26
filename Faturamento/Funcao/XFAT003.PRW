@@ -6,29 +6,26 @@
 #INCLUDE "TBICONN.CH"
 
 //---------------------------------------------------------
-/*/ Rotina XFAT003 (Fatura de Cobranca - Capetro)
-  Funcao U_XFAT003()
-
-  Descricao:
-  Rotina principal disparada pelo usuario a partir da
-  consulta de Pedidos de Venda. Valida o pedido e aciona,
-  dentro de um FWMsgRun, a montagem dos dados em memoria e a
-  geracao do PDF da Fatura (RptStatus foi removido por nao
-  exibir nenhuma regua util neste fluxo). Apos a impressao,
-  pergunta ao usuario se deseja gerar o boleto deste pedido; em
-  caso afirmativo, aciona XFAT003BOL() (geracao dos titulos via
-  Condicao()/FINA040) dentro de outro FWMsgRun proprio.
-
+/*/ Funcao: U_XFAT003
+  Descricao: Gera a fatura do pedido e pergunta se deve emitir o boleto.
   @author Raphael Neves (Hubvision)
-  @since  18/09/2026
 /*/
 //----------------------------------------------------------
 User Function XFAT003()
 
+    Local aPedAtu := XFAT003GPC()
+    Local cNota   := aPedAtu[1]
+    Local cSerie  := aPedAtu[2]
     Private oDadosFat := {}
 
     If Empty(SC5->C5_NUM)
         MsgAlert("Posicione um Pedido de Venda antes de imprimir a Fatura.", "Fatura de Cobranca")
+        Return
+    EndIf
+
+    XFAT003NFS(@cNota, @cSerie)
+
+    If !XFAT003GNF(cNota, cSerie)
         Return
     EndIf
 
@@ -45,16 +42,30 @@ User Function XFAT003()
 Return
 
 //---------------------------------------------------------
-/*/ Rotina XFAT003
-  Funcao XFAT003RUN()
+/*/ Funcao: XFAT003GPC
+  Descricao: Separa NF/Serie gravadas em C5_PEDECOM.
+  @author Raphael Neves (Hubvision)
+/*/
+//----------------------------------------------------------
+Static Function XFAT003GPC()
 
-  Descricao:
-  Executa a montagem dos dados e a geracao do PDF dentro de um
-  FWMsgRun, garantindo um contexto de dialogo interativo ativo
-  durante a criacao do FWMSPrinter.
+    Local cPedeCom := AllTrim(cValToChar(SC5->C5_PEDECOM))
+    Local nPos     := At("/", cPedeCom)
+    Local cNF      := ""
+    Local cSrs     := ""
+
+    If nPos > 0
+        cNF  := SubStr(cPedeCom, 1, nPos - 1)
+        cSrs := SubStr(cPedeCom, nPos + 1)
+    EndIf
+
+Return {cNF, cSrs}
+
+//---------------------------------------------------------
+/*/ Funcao: XFAT003RUN
+  Descricao: Monta os dados da fatura e gera o PDF em tela.
 
   @author Raphael Neves (Hubvision)
-  @since  19/09/2026
 /*/
 //----------------------------------------------------------
 Static Function XFAT003RUN()
@@ -66,17 +77,10 @@ Static Function XFAT003RUN()
 Return
 
 //---------------------------------------------------------
-/*/ Rotina XFAT003
-  Funcao XFAT003VAL() - (Antiga XFAT003Valida)
-
-  Descricao:
-  Realiza as validacoes previas de integridade antes da 
-  emissao. Verifica no banco de dados se o pedido posicionado 
-  possui ao menos um item (SC6) e se o cliente (SA1) esta 
-  cadastrado e sem bloqueio de faturamento.
+/*/ Funcao: XFAT003VAL
+  Descricao: Valida o pedido antes de emitir a fatura.
 
   @author Raphael Neves (Hubvision)
-  @since  18/09/2026
 /*/
 //----------------------------------------------------------
 Static Function XFAT003VAL()
@@ -113,23 +117,817 @@ Static Function XFAT003VAL()
 Return lOk
 
 //---------------------------------------------------------
-/*/ Rotina XFAT003
-  Funcao XFAT003MNT() - (Antiga XFAT003MontaDados)
+/*/ Funcao: XFAT003NFS
+  Descricao: Tela HTML (TWebEngine/TWebChannel) para selecionar a NF da fatura.
+  @author Elvis Siqueira
+/*/
+//----------------------------------------------------------
+Static Function XFAT003NFS(cNota, cSerie)
 
-  Descricao:
-  Monta a estrutura de dados da Fatura em memoria, em um array
-  de pares chave/valor (forma classica, sem uso de Hash Map).
-  Coleta e agrupa informacoes do cabecalho do pedido (SC5),
-  dados de endereco/documento do cliente (SA1), somatoria
-  dos totais e a lista detalhada de itens (SC6) do pedido. O
-  endereco do cliente e o local de entrega sao montados via
-  XFAT003ENDER(), incluindo bairro, complemento e CEP; o local
-  de entrega usa preferencialmente os campos especificos de
-  entrega da SA1 (A1_ENDENT/A1_BAIRROE/A1_COMPENT/A1_CEPE/
-  A1_MUNE/A1_ESTE) quando existirem e estiverem preenchidos.
+    Local oDlg
+    Local oWeb
+    Local oChannel
+    Local cPathLocal
+    Local cUrlWeb
+    Local cBarra
+    Local cHtml
+    Local nHandle
+    Local nTop
+    Local nLeft
+    Local nBottom
+    Local nRight
+    Local nHeight
+    Local nWidth
+
+    Private lNfsConf := .F.
+    Private cNfsDoc  := ""
+    Private cNfsSrs  := ""
+    Private cNfsNota := cNota
+    Private cNfsSrie := cSerie
+
+    cBarra     := IIf(IsSrvUnix(), "/", "\")
+    cPathLocal := cBarra + "web" + cBarra + "xfat003nfs.html"
+
+    cHtml := XFAT003HTM()
+
+    nHandle := FCreate(cPathLocal)
+
+    If nHandle == -1
+        MsgStop("Nao foi possivel gravar o arquivo HTML no servidor em: " + cPathLocal, "Fatura de Cobranca")
+        Return .T.
+    EndIf
+
+    FWrite(nHandle, cHtml)
+    FClose(nHandle)
+
+    cUrlWeb := CpyF2Web(cPathLocal)
+
+    If Empty(cUrlWeb)
+        MsgStop("Nao foi possivel disponibilizar a pagina HTML via CpyF2Web.", "Fatura de Cobranca")
+        Return .T.
+    EndIf
+
+    If Type("oMainWnd") == "O" .And. oMainWnd:nClientHeight > 0
+        nHeight := oMainWnd:nClientHeight * 0.75
+        nWidth  := oMainWnd:nClientWidth  * 0.75
+        nTop    := (oMainWnd:nClientHeight - nHeight) / 2
+        nLeft   := (oMainWnd:nClientWidth  - nWidth)  / 2
+        nBottom := nTop  + nHeight
+        nRight  := nLeft + nWidth
+    Else
+        nTop    := 020
+        nLeft   := 020
+        nBottom := 520
+        nRight  := 900
+    EndIf
+
+    DEFINE MSDIALOG oDlg TITLE "Selecione a Nota Fiscal - Pedido " + AllTrim(SC5->C5_NUM) ;
+        FROM nTop, nLeft TO nBottom, nRight PIXEL
+
+        oDlg:lEscClose := .T.
+
+        oChannel := TWebChannel():New()
+        oChannel:bJsToAdvpl := { |cSelf, cChave, cValor| XFAT003HDL(cChave, cValor, oDlg, oChannel) }
+        oChannel:connect()
+
+        oWeb := TWebEngine():New(oDlg, 0, 0, 100, 100, , oChannel:nPort)
+        oWeb:Align := CONTROL_ALIGN_ALLCLIENT
+        oWeb:SetAsMain()
+
+        oWeb:Navigate(cUrlWeb + "?port=" + cValToChar(oChannel:nPort))
+
+    ACTIVATE MSDIALOG oDlg CENTERED ;
+        ON INIT SetKey(VK_ESCAPE, { || oDlg:End() })
+
+    If lNfsConf
+        cNota  := cNfsDoc
+        cSerie := cNfsSrs
+    EndIf
+
+Return .T.
+
+//---------------------------------------------------------
+/*/ Funcao: XFAT003HDL
+  Descricao: Trata as mensagens recebidas do HTML via TWebChannel.
+/*/
+//----------------------------------------------------------
+Static Function XFAT003HDL(cChave, cValor, oDlgP, oChanP)
+
+    Local jDados
+
+    If cChave == "READY"
+        XFAT003NFT(oChanP)
+        Return .T.
+    EndIf
+
+    If cChave == "SELECAO_CONFIRMADA"
+        jDados := jsonObject():New()
+        jDados:FromJson(cValor)
+
+        If jDados:HasProperty("doc")
+            cNfsDoc  := AllTrim(jDados["doc"])
+            cNfsSrs  := AllTrim(jDados["serie"])
+            lNfsConf := .T.
+        EndIf
+
+        oDlgP:End()
+        Return .T.
+    EndIf
+
+    If cChave == "CLOSE_PANEL"
+        oDlgP:End()
+        Return .T.
+    EndIf
+
+Return .T.
+
+//---------------------------------------------------------
+/*/ Funcao: XFAT003HTM
+  Descricao: Monta o conteudo HTML da tela de selecao de NF.
+/*/
+//----------------------------------------------------------
+Static Function XFAT003HTM()
+
+    Local cHtml := ""
+
+    cHtml += "<!DOCTYPE html>" + Chr(13) + Chr(10)
+    cHtml += "<html lang=" + Chr(34) + "pt-BR" +;
+        Chr(34) + ">" + Chr(13) +;
+        Chr(10)
+    cHtml += "<head>" + Chr(13) + Chr(10)
+    cHtml += "  <meta charset=" + Chr(34) + "UTF-8" +;
+        Chr(34) + ">" + Chr(13) +;
+        Chr(10)
+    cHtml += "  <meta name=" + Chr(34) + "viewport" +;
+        Chr(34) + " content=" + Chr(34) +;
+        "width=device-width, initial-scale=1.0" + Chr(34) + ">" +;
+        Chr(13) + Chr(10)
+    cHtml += "  <title>Fatura de Cobranca - Selecao de Nota Fiscal</title>" + Chr(13) + Chr(10)
+    cHtml += "  <script src=" + Chr(34) + "https://cdn.tailwindcss.com" +;
+        Chr(34) + "></script>" + Chr(13) +;
+        Chr(10)
+    cHtml += "  <link rel=" + Chr(34) + "stylesheet" +;
+        Chr(34) + " href=" + Chr(34) +;
+        "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" + Chr(34) + ">" +;
+        Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "  <script>" + Chr(13) + Chr(10)
+    cHtml += "    " + Chr(34) + "use strict" +;
+        Chr(34) + ";" + Chr(13) +;
+        Chr(10)
+    cHtml += "    /* globals window, document, console, MessageChannel, WebSocket, QWebChannel, CustomEvent */" + Chr(13) + Chr(10)
+    cHtml += "    function QObject(e, n, t) { function o(e, n) { var o = e[0], r = e[1]; i[o] = { connect: function(e) { return " + Chr(34) + "function" +;
+        Chr(34) + " != typeof e ? void console.error(" + Chr(34) +;
+        "Bad callback given to connect to signal " + Chr(34) + " + o) : (i.__objectSignals__[r] = i.__objectSignals__[r] || [], i.__objectSignals__[r].push(e), void (n || " +;
+        Chr(34) + "destroyed" + Chr(34) +;
+        " === o || t.exec({ type: QWebChannelMessageTypes.connectToSignal, object: i.__id__, signal: r }))) }, disconnect: function(e) { if (" + Chr(34) + "function" +;
+        Chr(34) + " != typeof e) return void console.error(" + Chr(34) +;
+        "Bad callback given to disconnect from signal " + Chr(34) + " + o); i.__objectSignals__[r] = i.__objectSignals__[r] || []; var a = i.__objectSignals__[r].indexOf(e); return -1 === a ? void console.error(" +;
+        Chr(34) + "Cannot find connection of signal " + Chr(34) +;
+        " + o + " + Chr(34) + " to " +;
+        Chr(34) + " + e.name) : (i.__objectSignals__[r].splice(a, 1), void (n || 0 !== i.__objectSignals__[r].length || t.exec({ type: QWebChannelMessageTypes.disconnectFromSignal, object: i.__id__, signal: r }))) } } } function r(e, n) { var t = i.__objectSignals__[e]; t && t.forEach(function(e) { e.apply(e, n) }) } function a(e) { var n = e[0], o = e[1]; i[n] = function() { for (var e, n = [], r = 0; r < arguments.length; ++r) " + Chr(34) +;
+        "function" + Chr(34) + " == typeof arguments[r] ? e = arguments[r] : n.push(arguments[r]); t.exec({ type: QWebChannelMessageTypes.invokeMethod, object: i.__id__, method: o, args: n }, function(n) { if (void 0 !== n) { var t = i.unwrapQObject(n); e && e(t) } }) } } function s(e) { var n = e[0], r = e[1], a = e[2]; i.__propertyCache__[n] = e[3], a && (1 === a[0] && (a[0] = r + " +;
+        Chr(34) + "Changed" + Chr(34) +;
+        "), o(a, !0)), Object.defineProperty(i, r, { get: function() { var e = i.__propertyCache__[n]; return void 0 === e && console.warn(" + Chr(39) + "Undefined value in property cache for property " +;
+        Chr(34) + Chr(39) + " + r + " +;
+        Chr(39) + Chr(34) + " in object " +;
+        Chr(39) + " + i.__id__), e }, set: function(e) { return void 0 === e ? void console.warn(" + Chr(34) +;
+        "Property setter for " + Chr(34) + " + r + " +;
+        Chr(34) + " called with undefined value!" + Chr(34) +;
+        ") : (i.__propertyCache__[n] = e, void t.exec({ type: QWebChannelMessageTypes.setProperty, object: i.__id__, property: n, value: e })) } }) } this.__id__ = e, t.objects[e] = this, this.__objectSignals__ = {}, this.__propertyCache__ = {}; var i = this; this.unwrapQObject = function(e) { if (e instanceof Array) { for (var n = new Array(e.length), o = 0; o < e.length; ++o) n[o] = i.unwrapQObject(e[o]); return n } if (!e || !e[" + Chr(34) + "__QObject*__" +;
+        Chr(34) + "] || void 0 === e.id) return e; var r = e.id; if (t.objects[r]) return t.objects[r]; if (!e.data) return void console.error(" + Chr(34) +;
+        "Cannot unwrap unknown QObject " + Chr(34) + " + r + " +;
+        Chr(34) + " without data." + Chr(34) +;
+        "); var a = new QObject(r, e.data, t); return a.destroyed.connect(function() { if (t.objects[r] === a) { delete t.objects[r]; var e = []; for (var n in a) e.push(n); for (var o in e) delete a[e[o]] } }), a.unwrapProperties(), a }, this.unwrapProperties = function() { for (var e in i.__propertyCache__) i.__propertyCache__[e] = i.unwrapQObject(i.__propertyCache__[e]) }, this.propertyUpdate = function(e, n) { for (var t in n) { var o = n[t], r = t.objects[o.object]; r ? r.propertyUpdate(o.signals, o.properties) : console.warn(" + Chr(34) + "Unhandled property update: " +;
+        Chr(34) + " + o.object + " + Chr(34) +;
+        "::" + Chr(34) + " + o.signal) } t.exec({ type: QWebChannelMessageTypes.idle }) }, this.signalEmitted = function(e, n) { r(e, n) }, n.methods.forEach(a), n.properties.forEach(s), n.signals.forEach(function(e) { o(e, !1) }); for (var e in n.enums) i[e] = n.enums[e] } var QWebChannelMessageTypes = { signal: 1, propertyUpdate: 2, init: 3, idle: 4, debug: 5, invokeMethod: 6, connectToSignal: 7, disconnectFromSignal: 8, setProperty: 9, response: 10 }, QWebChannel = function(e, n) { if (" +;
+        Chr(34) + "object" + Chr(34) +;
+        " != typeof e || " + Chr(34) + "function" +;
+        Chr(34) + " != typeof e.send) return void console.error(" + Chr(34) +;
+        "The QWebChannel expects a transport object with a send function and onmessage callback property. Given is: transport: " + Chr(34) + " + typeof e + " +;
+        Chr(34) + ", transport.send: " + Chr(34) +;
+        " + typeof e.send); var t = this; this.transport = e, this.send = function(e) { " + Chr(34) + "string" +;
+        Chr(34) + " != typeof e && (e = JSON.stringify(e)), t.transport.send(e) }, this.transport.onmessage = function(e) { var n = e.data; switch (" + Chr(34) +;
+        "string" + Chr(34) + " == typeof n && (n = JSON.parse(n)), n.type) { case QWebChannelMessageTypes.signal: t.handleSignal(n); break; case QWebChannelMessageTypes.response: t.handleResponse(n); break; case QWebChannelMessageTypes.propertyUpdate: t.handlePropertyUpdate(n); break; default: console.error(" +;
+        Chr(34) + "invalid message received:" + Chr(34) +;
+        ", e.data) } }, this.execCallbacks = {}, this.execId = 0, this.exec = function(e, n) { return n ? (t.execId === Number.MAX_VALUE && (t.execId = Number.MIN_VALUE), e.hasOwnProperty(" + Chr(34) + "id" +;
+        Chr(34) + ") ? void console.error(" + Chr(34) +;
+        "Cannot exec message with property id: " + Chr(34) + " + JSON.stringify(e)) : (e.id = t.execId++ , t.execCallbacks[e.id] = n, void t.send(e))) : void t.send(e) }, this.objects = {}, this.handleSignal = function(e) { var n = t.objects[e.object]; n ? n.signalEmitted(e.signal, e.args) : console.warn(" +;
+        Chr(34) + "Unhandled signal: " + Chr(34) +;
+        " + e.object + " + Chr(34) + "::" +;
+        Chr(34) + " + e.signal) }, this.handleResponse = function(e) { return e.hasOwnProperty(" + Chr(34) +;
+        "id" + Chr(34) + ") ? (t.execCallbacks[e.id](e.data), void delete t.execCallbacks[e.id]) : void console.error(" +;
+        Chr(34) + "Invalid response message received: " + Chr(34) +;
+        ", JSON.stringify(e)) }, this.handlePropertyUpdate = function(e) { for (var n in e.data) { var o = e.data[n], r = t.objects[o.object]; r ? r.propertyUpdate(o.signals, o.properties) : console.warn(" + Chr(34) + "Unhandled property update: " +;
+        Chr(34) + " + o.object + " + Chr(34) +;
+        "::" + Chr(34) + " + o.signal) } t.exec({ type: QWebChannelMessageTypes.idle }) }, this.debug = function(e) { t.send({ type: QWebChannelMessageTypes.debug, data: e }) }, t.exec({ type: QWebChannelMessageTypes.init }, function(e) { for (var o in e) var r = new QObject(o, e[o], t); for (var o in t.objects) t.objects[o].unwrapProperties(); n && n(t), t.exec({ type: QWebChannelMessageTypes.idle }) }) }; " +;
+        Chr(34) + "object" + Chr(34) +;
+        " == typeof module && (module.exports = { QWebChannel: QWebChannel });" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "    var getParam = function(queryField) {" + Chr(13) + Chr(10)
+    cHtml += "      var url = window.location.href; queryField = queryField.replace(/[\[\]]/g, " + Chr(34) + "\\$&" +;
+        Chr(34) + ");" + Chr(13) +;
+        Chr(10)
+    cHtml += "      var regex = new RegExp(" + Chr(34) + "[?&]" +;
+        Chr(34) + " + queryField + " + Chr(34) +;
+        "(=([^&#]*)|&|#|$)" + Chr(34) + ", " +;
+        Chr(34) + "i" + Chr(34) +;
+        "), results = regex.exec(url);" + Chr(13) + Chr(10)
+    cHtml += "      if (!results) return null; if (!results[2]) return " + Chr(39) + Chr(39) +;
+        ";" + Chr(13) + Chr(10)
+    cHtml += "      return decodeURIComponent(results[2].replace(/\+/g, " + Chr(34) + " " +;
+        Chr(34) + "));" + Chr(13) +;
+        Chr(10)
+    cHtml += "    };" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "    var origin = getParam(" + Chr(39) + "totvstec_remote_origin" +;
+        Chr(39) + "); if ((origin === null) || (origin === " + Chr(39) +;
+        Chr(39) + ")) origin = " + Chr(39) +;
+        "*" + Chr(39) + ";" +;
+        Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "    window.onmessage = function(event) {" + Chr(13) + Chr(10)
+    cHtml += "      var data = event.data; if ((origin !== " + Chr(39) + "*" +;
+        Chr(39) + ") && (event.origin !== origin)) return;" + Chr(13) +;
+        Chr(10)
+    cHtml += "      if ((data.type ? data.type : " + Chr(39) + Chr(39) +;
+        ").toUpperCase() !== " + Chr(39) + "MS_WEBENGINERUNJAVASCRIPT" +;
+        Chr(39) + ") return;" + Chr(13) +;
+        Chr(10)
+    cHtml += "      eval(data.value);" + Chr(13) + Chr(10)
+    cHtml += "    };" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "    var twebchannel = {" + Chr(13) + Chr(10)
+    cHtml += "      version: " + Chr(34) + "1.0.4" +;
+        Chr(34) + ", internalPort: 0," + Chr(13) +;
+        Chr(10)
+    cHtml += "      connect: function(callback) {" + Chr(13) + Chr(10)
+    cHtml += "        var port = getParam(" + Chr(39) + "port" +;
+        Chr(39) + ") || getParam(" + Chr(39) +;
+        "totvstec_websocket_port" + Chr(39) + "), remoteType = getParam(" +;
+        Chr(39) + "totvstec_remote_type" + Chr(39) +;
+        "), threadId = getParam(" + Chr(39) + "totvstec_threadId" +;
+        Chr(39) + ");" + Chr(13) +;
+        Chr(10)
+    cHtml += "        this.init(port, remoteType, threadId, callback);" + Chr(13) + Chr(10)
+    cHtml += "      }," + Chr(13) + Chr(10)
+    cHtml += "      init: function(port, remoteType, threadId, callback) {" + Chr(13) + Chr(10)
+    cHtml += "        this.internalPort = Number(port); this.remoteType = Number(remoteType); this.threadId = threadId;" + Chr(13) + Chr(10)
+    cHtml += "        var fireEvent = function() {" + Chr(13) + Chr(10)
+    cHtml += "          var event = new CustomEvent(" + Chr(39) + "twebchannelready" +;
+        Chr(39) + "); document.dispatchEvent(event);" + Chr(13) +;
+        Chr(10)
+    cHtml += "          if (typeof callback === " + Chr(39) + "function" +;
+        Chr(39) + ") callback();" + Chr(13) +;
+        Chr(10)
+    cHtml += "        };" + Chr(13) + Chr(10)
+    cHtml += "        if (this.remoteType !== 5) { this.connectWS(fireEvent); } else { this.connectMessageChannel(fireEvent); }" + Chr(13) + Chr(10)
+    cHtml += "      }," + Chr(13) + Chr(10)
+    cHtml += "      jsToAdvpl: function(key, value) {" + Chr(13) + Chr(10)
+    cHtml += "        if (this.remoteType !== 5) { window.dialog.jsToAdvpl(key, value); } else { this.sendMessageChannel(key, value); }" + Chr(13) + Chr(10)
+    cHtml += "      }," + Chr(13) + Chr(10)
+    cHtml += "      advplToJs: function(key, value) { console.log(" + Chr(39) + "not connected" +;
+        Chr(39) + "); }," + Chr(13) +;
+        Chr(10)
+    cHtml += "      connectWS: function(callback) {" + Chr(13) + Chr(10)
+    cHtml += "        var baseUrl = " + Chr(34) + "ws://127.0.0.1:" +;
+        Chr(34) + " + this.internalPort, socket = new WebSocket(baseUrl);" + Chr(13) +;
+        Chr(10)
+    cHtml += "        socket.onclose = function() { console.error(" + Chr(34) + "WebChannel closed" +;
+        Chr(34) + "); };" + Chr(13) +;
+        Chr(10)
+    cHtml += "        socket.onerror = function(error) { console.error(" + Chr(34) + "WebChannel error: " +;
+        Chr(34) + " + error); };" + Chr(13) +;
+        Chr(10)
+    cHtml += "        socket.onopen = function() {" + Chr(13) + Chr(10)
+    cHtml += "          new QWebChannel(socket, function(channel) {" + Chr(13) + Chr(10)
+    cHtml += "            window.dialog = channel.objects.mainDialog;" + Chr(13) + Chr(10)
+    cHtml += "            window.dialog.advplToJs.connect(twebchannel.onReceiveAdvplToJs.bind(twebchannel));" + Chr(13) + Chr(10)
+    cHtml += "            if (typeof callback === " + Chr(39) + "function" +;
+        Chr(39) + ") callback();" + Chr(13) +;
+        Chr(10)
+    cHtml += "          });" + Chr(13) + Chr(10)
+    cHtml += "        };" + Chr(13) + Chr(10)
+    cHtml += "      }," + Chr(13) + Chr(10)
+    cHtml += "      onReceiveAdvplToJs: function(key, value) { this.advplToJs(key, value); }," + Chr(13) + Chr(10)
+    cHtml += "      connectMessageChannel: function(callback) {" + Chr(13) + Chr(10)
+    cHtml += "        this.channel = new MessageChannel();" + Chr(13) + Chr(10)
+    cHtml += "        this.channel.port1.onmessage = function(event) {" + Chr(13) + Chr(10)
+    cHtml += "          var data = event.data, messageType = (data.type || " + Chr(39) + "UNDEFINED" +;
+        Chr(39) + ").toUpperCase();" + Chr(13) +;
+        Chr(10)
+    cHtml += "          switch (messageType) {" + Chr(13) + Chr(10)
+    cHtml += "            case " + Chr(39) + "CONNECTED" +;
+        Chr(39) + ":" + Chr(13) +;
+        Chr(10)
+    cHtml += "              window.dialog = window.dialog || {}; window.dialog.jsToAdvpl = twebchannel.sendMessageChannel.bind(twebchannel);" + Chr(13) + Chr(10)
+    cHtml += "              if (typeof callback === " + Chr(39) + "function" +;
+        Chr(39) + ") callback(); break;" + Chr(13) +;
+        Chr(10)
+    cHtml += "            case " + Chr(39) + "EXEC" +;
+        Chr(39) + ": twebchannel.onReceiveAdvplToJs(data.value.type, data.value.content); break;" + Chr(13) +;
+        Chr(10)
+    cHtml += "          }" + Chr(13) + Chr(10)
+    cHtml += "        };" + Chr(13) + Chr(10)
+    cHtml += "        window.parent.postMessage({ type: " + Chr(39) + "CONNECT" +;
+        Chr(39) + ", port: this.internalPort, threadId: this.threadId }, origin, [this.channel.port2]);" + Chr(13) +;
+        Chr(10)
+    cHtml += "      }," + Chr(13) + Chr(10)
+    cHtml += "      sendMessageChannel: function(key, value) {" + Chr(13) + Chr(10)
+    cHtml += "        var message = { type: key, content: value, port: this.internalPort }; this.channel.port1.postMessage(message);" + Chr(13) + Chr(10)
+    cHtml += "      }" + Chr(13) + Chr(10)
+    cHtml += "    };" + Chr(13) + Chr(10)
+    cHtml += "  </script>" + Chr(13) + Chr(10)
+    cHtml += "</head>" + Chr(13) + Chr(10)
+    cHtml += "<body class=" + Chr(34) + "bg-slate-100 text-slate-800 font-sans antialiased h-screen flex flex-col p-4 select-none relative" +;
+        Chr(34) + ">" + Chr(13) +;
+        Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "  <!-- CABECALHO / TITULO / CAMPO DE PESQUISA -->" + Chr(13) + Chr(10)
+    cHtml += "  <div class=" + Chr(34) + "bg-white p-3 rounded-lg border border-slate-200 shadow-sm mb-3 flex flex-col gap-2" +;
+        Chr(34) + ">" + Chr(13) +;
+        Chr(10)
+    cHtml += "    <h1 id=" + Chr(34) + "hdrTitulo" +;
+        Chr(34) + " class=" + Chr(34) +;
+        "text-sm font-bold text-slate-700" + Chr(34) + ">Selecione a Nota Fiscal</h1>" +;
+        Chr(13) + Chr(10)
+    cHtml += "    <div class=" + Chr(34) + "flex items-center gap-3" +;
+        Chr(34) + ">" + Chr(13) +;
+        Chr(10)
+    cHtml += "      <div class=" + Chr(34) + "relative flex-1" +;
+        Chr(34) + ">" + Chr(13) +;
+        Chr(10)
+    cHtml += "        <input type=" + Chr(34) + "text" +;
+        Chr(34) + " id=" + Chr(34) +;
+        "txtSearch" + Chr(34) + " placeholder=" +;
+        Chr(34) + "PESQUISAR POR NF, SERIE, EMISSAO OU CLIENTE..." + Chr(34) +;
+        Chr(13) + Chr(10)
+    cHtml += "               class=" + Chr(34) + "w-full pl-9 pr-4 py-2 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent uppercase" +;
+        Chr(34) + ">" + Chr(13) +;
+        Chr(10)
+    cHtml += "        <i class=" + Chr(34) + "fa-solid fa-magnifying-glass absolute left-3 top-2.5 text-slate-400 text-sm" +;
+        Chr(34) + "></i>" + Chr(13) +;
+        Chr(10)
+    cHtml += "      </div>" + Chr(13) + Chr(10)
+    cHtml += "      <button onclick=" + Chr(34) + "confirmarSelecao()" +;
+        Chr(34) + " class=" + Chr(34) +;
+        "px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold rounded-md text-sm transition-all shadow" + Chr(34) + ">" +;
+        Chr(13) + Chr(10)
+    cHtml += "        Confirmar" + Chr(13) + Chr(10)
+    cHtml += "      </button>" + Chr(13) + Chr(10)
+    cHtml += "      <button onclick=" + Chr(34) + "cancelarSelecao()" +;
+        Chr(34) + " class=" + Chr(34) +;
+        "px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-700 font-semibold rounded-md text-sm transition-all" + Chr(34) + ">" +;
+        Chr(13) + Chr(10)
+    cHtml += "        Cancelar" + Chr(13) + Chr(10)
+    cHtml += "      </button>" + Chr(13) + Chr(10)
+    cHtml += "    </div>" + Chr(13) + Chr(10)
+    cHtml += "  </div>" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "  <!-- GRID DE NOTAS FISCAIS -->" + Chr(13) + Chr(10)
+    cHtml += "  <div class=" + Chr(34) + "flex-1 bg-white rounded-lg border border-slate-200 shadow-sm flex flex-col overflow-hidden min-h-0" +;
+        Chr(34) + ">" + Chr(13) +;
+        Chr(10)
+    cHtml += "    <div class=" + Chr(34) + "overflow-y-auto flex-1" +;
+        Chr(34) + ">" + Chr(13) +;
+        Chr(10)
+    cHtml += "      <table class=" + Chr(34) + "w-full text-left border-collapse text-xs" +;
+        Chr(34) + ">" + Chr(13) +;
+        Chr(10)
+    cHtml += "        <thead class=" + Chr(34) + "bg-slate-200 text-slate-700 font-bold sticky top-0 border-b border-slate-300" +;
+        Chr(34) + ">" + Chr(13) +;
+        Chr(10)
+    cHtml += "          <tr>" + Chr(13) + Chr(10)
+    cHtml += "            <th class=" + Chr(34) + "p-2 w-32" +;
+        Chr(34) + ">Nota Fiscal</th>" + Chr(13) +;
+        Chr(10)
+    cHtml += "            <th class=" + Chr(34) + "p-2 w-20" +;
+        Chr(34) + ">Serie</th>" + Chr(13) +;
+        Chr(10)
+    cHtml += "            <th class=" + Chr(34) + "p-2 w-28" +;
+        Chr(34) + ">Emissao</th>" + Chr(13) +;
+        Chr(10)
+    cHtml += "            <th class=" + Chr(34) + "p-2" +;
+        Chr(34) + ">Cliente</th>" + Chr(13) +;
+        Chr(10)
+    cHtml += "          </tr>" + Chr(13) + Chr(10)
+    cHtml += "        </thead>" + Chr(13) + Chr(10)
+    cHtml += "        <tbody id=" + Chr(34) + "tbNotas" +;
+        Chr(34) + ">" + Chr(13) +;
+        Chr(10)
+    cHtml += "          <tr>" + Chr(13) + Chr(10)
+    cHtml += "            <td colspan=" + Chr(34) + "4" +;
+        Chr(34) + " class=" + Chr(34) +;
+        "p-4 text-center text-slate-400" + Chr(34) + ">Carregando...</td>" +;
+        Chr(13) + Chr(10)
+    cHtml += "          </tr>" + Chr(13) + Chr(10)
+    cHtml += "        </tbody>" + Chr(13) + Chr(10)
+    cHtml += "      </table>" + Chr(13) + Chr(10)
+    cHtml += "    </div>" + Chr(13) + Chr(10)
+    cHtml += "  </div>" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "  <script>" + Chr(13) + Chr(10)
+    cHtml += "    var notasList = [];" + Chr(13) + Chr(10)
+    cHtml += "    var selectedIndex = -1;" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "    window.onload = function() {" + Chr(13) + Chr(10)
+    cHtml += "      twebchannel.connect(function() {" + Chr(13) + Chr(10)
+    cHtml += "        twebchannel.jsToAdvpl(" + Chr(34) + "READY" +;
+        Chr(34) + ", " + Chr(34) +;
+        Chr(34) + ");" + Chr(13) +;
+        Chr(10)
+    cHtml += "      });" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "      twebchannel.advplToJs = function(key, value) {" + Chr(13) + Chr(10)
+    cHtml += "        if (key === " + Chr(39) + "renderNFs" +;
+        Chr(39) + ") renderNFs(value);" + Chr(13) +;
+        Chr(10)
+    cHtml += "      };" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "      document.getElementById(" + Chr(39) + "txtSearch" +;
+        Chr(39) + ").addEventListener(" + Chr(39) +;
+        "keydown" + Chr(39) + ", function(e) {" +;
+        Chr(13) + Chr(10)
+    cHtml += "        if (e.key === " + Chr(39) + "Enter" +;
+        Chr(39) + ") {" + Chr(13) +;
+        Chr(10)
+    cHtml += "          e.preventDefault();" + Chr(13) + Chr(10)
+    cHtml += "        }" + Chr(13) + Chr(10)
+    cHtml += "      });" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "      document.getElementById(" + Chr(39) + "txtSearch" +;
+        Chr(39) + ").addEventListener(" + Chr(39) +;
+        "input" + Chr(39) + ", function() {" +;
+        Chr(13) + Chr(10)
+    cHtml += "        aplicarFiltro();" + Chr(13) + Chr(10)
+    cHtml += "      });" + Chr(13) + Chr(10)
+    cHtml += "    };" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "    function renderNFs(jsonStr) {" + Chr(13) + Chr(10)
+    cHtml += "      var data = typeof jsonStr === " + Chr(39) + "string" +;
+        Chr(39) + " ? JSON.parse(jsonStr) : jsonStr;" + Chr(13) +;
+        Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "      if (data.titulo) {" + Chr(13) + Chr(10)
+    cHtml += "        document.getElementById(" + Chr(39) + "hdrTitulo" +;
+        Chr(39) + ").textContent = data.titulo;" + Chr(13) +;
+        Chr(10)
+    cHtml += "      }" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "      var aNulo = { doc: " + Chr(39) + Chr(39) +;
+        ", serie: " + Chr(39) + Chr(39) +;
+        ", emissao: " + Chr(39) + Chr(39) +;
+        ", cliente: " + Chr(39) + "(Nao associar Nota Fiscal)" +;
+        Chr(39) + ", naoAssociar: true };" + Chr(13) +;
+        Chr(10)
+    cHtml += "      notasList = [aNulo].concat(data.notas || []);" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "      var docSel   = (data.selecionado && data.selecionado.doc)   ? data.selecionado.doc   : " + Chr(39) + Chr(39) +;
+        ";" + Chr(13) + Chr(10)
+    cHtml += "      var serieSel = (data.selecionado && data.selecionado.serie) ? data.selecionado.serie : " + Chr(39) + Chr(39) +;
+        ";" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "      notasList.forEach(function(n) {" + Chr(13) + Chr(10)
+    cHtml += "        n.selecionado = (!n.naoAssociar && n.doc === docSel && n.serie === serieSel) ||" + Chr(13) + Chr(10)
+    cHtml += "                        (n.naoAssociar && docSel === " + Chr(39) + Chr(39) +;
+        " && serieSel === " + Chr(39) + Chr(39) +;
+        ");" + Chr(13) + Chr(10)
+    cHtml += "      });" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "      document.getElementById(" + Chr(39) + "txtSearch" +;
+        Chr(39) + ").value = " + Chr(39) +;
+        Chr(39) + ";" + Chr(13) +;
+        Chr(10)
+    cHtml += "      aplicarFiltro();" + Chr(13) + Chr(10)
+    cHtml += "    }" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "    function aplicarFiltro() {" + Chr(13) + Chr(10)
+    cHtml += "      var termo = document.getElementById(" + Chr(39) + "txtSearch" +;
+        Chr(39) + ").value.toUpperCase();" + Chr(13) +;
+        Chr(10)
+    cHtml += "      var tbody = document.getElementById(" + Chr(39) + "tbNotas" +;
+        Chr(39) + ");" + Chr(13) +;
+        Chr(10)
+    cHtml += "      tbody.innerHTML = " + Chr(39) + Chr(39) +;
+        ";" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "      var visiveis = [];" + Chr(13) + Chr(10)
+    cHtml += "      var idxSelInicial = -1;" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "      notasList.forEach(function(n, idx) {" + Chr(13) + Chr(10)
+    cHtml += "        var bate = n.naoAssociar ||" + Chr(13) + Chr(10)
+    cHtml += "                   termo === " + Chr(39) + Chr(39) +;
+        " ||" + Chr(13) + Chr(10)
+    cHtml += "                   (n.doc     && n.doc.toUpperCase().indexOf(termo)     !== -1) ||" + Chr(13) + Chr(10)
+    cHtml += "                   (n.serie   && n.serie.toUpperCase().indexOf(termo)   !== -1) ||" + Chr(13) + Chr(10)
+    cHtml += "                   (n.emissao && n.emissao.toUpperCase().indexOf(termo) !== -1) ||" + Chr(13) + Chr(10)
+    cHtml += "                   (n.cliente && n.cliente.toUpperCase().indexOf(termo) !== -1);" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "        if (!bate) return;" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "        visiveis.push(idx);" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "        var tr = document.createElement(" + Chr(39) + "tr" +;
+        Chr(39) + ");" + Chr(13) +;
+        Chr(10)
+    cHtml += "        tr.className = " + Chr(34) + "border-b border-slate-100 hover:bg-blue-50 cursor-pointer transition-colors" +;
+        Chr(34) + " +" + Chr(13) +;
+        Chr(10)
+    cHtml += "                        (n.naoAssociar ? " + Chr(34) + " text-rose-600 font-semibold" +;
+        Chr(34) + " : " + Chr(34) +;
+        Chr(34) + ");" + Chr(13) +;
+        Chr(10)
+    cHtml += "        tr.setAttribute(" + Chr(39) + "data-idx" +;
+        Chr(39) + ", idx);" + Chr(13) +;
+        Chr(10)
+    cHtml += "        tr.onclick = function() { selecionarNota(idx, tr); };" + Chr(13) + Chr(10)
+    cHtml += "        tr.ondblclick = function() { selecionarNota(idx, tr); confirmarSelecao(); };" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "        var tdDoc = document.createElement(" + Chr(39) + "td" +;
+        Chr(39) + ");" + Chr(13) +;
+        Chr(10)
+    cHtml += "        tdDoc.className = " + Chr(34) + "p-2 font-mono font-bold" +;
+        Chr(34) + ";" + Chr(13) +;
+        Chr(10)
+    cHtml += "        tdDoc.textContent = n.naoAssociar ? " + Chr(39) + Chr(39) +;
+        " : n.doc;" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "        var tdSerie = document.createElement(" + Chr(39) + "td" +;
+        Chr(39) + ");" + Chr(13) +;
+        Chr(10)
+    cHtml += "        tdSerie.className = " + Chr(34) + "p-2 font-mono" +;
+        Chr(34) + ";" + Chr(13) +;
+        Chr(10)
+    cHtml += "        tdSerie.textContent = n.naoAssociar ? " + Chr(39) + Chr(39) +;
+        " : n.serie;" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "        var tdEmis = document.createElement(" + Chr(39) + "td" +;
+        Chr(39) + ");" + Chr(13) +;
+        Chr(10)
+    cHtml += "        tdEmis.className = " + Chr(34) + "p-2" +;
+        Chr(34) + ";" + Chr(13) +;
+        Chr(10)
+    cHtml += "        tdEmis.textContent = n.naoAssociar ? " + Chr(39) + Chr(39) +;
+        " : n.emissao;" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "        var tdCli = document.createElement(" + Chr(39) + "td" +;
+        Chr(39) + ");" + Chr(13) +;
+        Chr(10)
+    cHtml += "        tdCli.className = " + Chr(34) + "p-2" +;
+        Chr(34) + ";" + Chr(13) +;
+        Chr(10)
+    cHtml += "        tdCli.colSpan = n.naoAssociar ? 4 : 1;" + Chr(13) + Chr(10)
+    cHtml += "        tdCli.textContent = n.cliente;" + Chr(13) + Chr(10)
+    cHtml += "        if (n.naoAssociar) {" + Chr(13) + Chr(10)
+    cHtml += "          tdDoc.remove ? null : null;" + Chr(13) + Chr(10)
+    cHtml += "        }" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "        tr.appendChild(tdDoc);" + Chr(13) + Chr(10)
+    cHtml += "        tr.appendChild(tdSerie);" + Chr(13) + Chr(10)
+    cHtml += "        tr.appendChild(tdEmis);" + Chr(13) + Chr(10)
+    cHtml += "        tr.appendChild(tdCli);" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "        if (n.naoAssociar) {" + Chr(13) + Chr(10)
+    cHtml += "          tr.innerHTML = " + Chr(39) + Chr(39) +;
+        ";" + Chr(13) + Chr(10)
+    cHtml += "          var tdUnica = document.createElement(" + Chr(39) + "td" +;
+        Chr(39) + ");" + Chr(13) +;
+        Chr(10)
+    cHtml += "          tdUnica.className = " + Chr(34) + "p-2" +;
+        Chr(34) + ";" + Chr(13) +;
+        Chr(10)
+    cHtml += "          tdUnica.colSpan = 4;" + Chr(13) + Chr(10)
+    cHtml += "          tdUnica.textContent = n.cliente;" + Chr(13) + Chr(10)
+    cHtml += "          tr.appendChild(tdUnica);" + Chr(13) + Chr(10)
+    cHtml += "        }" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "        tbody.appendChild(tr);" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "        if (n.selecionado) {" + Chr(13) + Chr(10)
+    cHtml += "          idxSelInicial = idx;" + Chr(13) + Chr(10)
+    cHtml += "        }" + Chr(13) + Chr(10)
+    cHtml += "      });" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "      if (tbody.children.length === 0) {" + Chr(13) + Chr(10)
+    cHtml += "        tbody.innerHTML = " + Chr(39) + "<tr><td colspan=" +;
+        Chr(34) + "4" + Chr(34) +;
+        " class=" + Chr(34) + "p-4 text-center text-slate-400" +;
+        Chr(34) + ">Nenhuma nota fiscal localizada.</td></tr>" + Chr(39) +;
+        ";" + Chr(13) + Chr(10)
+    cHtml += "        selectedIndex = -1;" + Chr(13) + Chr(10)
+    cHtml += "        return;" + Chr(13) + Chr(10)
+    cHtml += "      }" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "      if (idxSelInicial === -1) {" + Chr(13) + Chr(10)
+    cHtml += "        idxSelInicial = visiveis[0];" + Chr(13) + Chr(10)
+    cHtml += "      }" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "      var trSel = document.querySelector(" + Chr(39) + "#tbNotas tr[data-idx=" +;
+        Chr(34) + Chr(39) + " + idxSelInicial + " +;
+        Chr(39) + Chr(34) + "]" +;
+        Chr(39) + ");" + Chr(13) +;
+        Chr(10)
+    cHtml += "      selecionarNota(idxSelInicial, trSel);" + Chr(13) + Chr(10)
+    cHtml += "    }" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "    function selecionarNota(idx, trElement) {" + Chr(13) + Chr(10)
+    cHtml += "      if (idx < 0 || idx >= notasList.length) return;" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "      selectedIndex = idx;" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "      var rows = document.querySelectorAll(" + Chr(39) + "#tbNotas tr" +;
+        Chr(39) + ");" + Chr(13) +;
+        Chr(10)
+    cHtml += "      rows.forEach(function(r) { r.classList.remove(" + Chr(39) + "bg-blue-100" +;
+        Chr(39) + "); });" + Chr(13) +;
+        Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "      if (!trElement) {" + Chr(13) + Chr(10)
+    cHtml += "        trElement = document.querySelector(" + Chr(39) + "#tbNotas tr[data-idx=" +;
+        Chr(34) + Chr(39) + " + idx + " +;
+        Chr(39) + Chr(34) + "]" +;
+        Chr(39) + ");" + Chr(13) +;
+        Chr(10)
+    cHtml += "      }" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "      if (trElement) {" + Chr(13) + Chr(10)
+    cHtml += "        trElement.classList.add(" + Chr(39) + "bg-blue-100" +;
+        Chr(39) + ");" + Chr(13) +;
+        Chr(10)
+    cHtml += "        trElement.scrollIntoView({ block: " + Chr(39) + "nearest" +;
+        Chr(39) + ", behavior: " + Chr(39) +;
+        "smooth" + Chr(39) + " });" +;
+        Chr(13) + Chr(10)
+    cHtml += "      }" + Chr(13) + Chr(10)
+    cHtml += "    }" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "    function confirmarSelecao() {" + Chr(13) + Chr(10)
+    cHtml += "      var nota = (selectedIndex >= 0 && selectedIndex < notasList.length) ? notasList[selectedIndex] : notasList[0];" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "      var payload = JSON.stringify({" + Chr(13) + Chr(10)
+    cHtml += "        doc:   nota.naoAssociar ? " + Chr(39) + Chr(39) +;
+        " : nota.doc," + Chr(13) + Chr(10)
+    cHtml += "        serie: nota.naoAssociar ? " + Chr(39) + Chr(39) +;
+        " : nota.serie" + Chr(13) + Chr(10)
+    cHtml += "      });" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "      if (twebchannel) {" + Chr(13) + Chr(10)
+    cHtml += "        twebchannel.jsToAdvpl(" + Chr(34) + "SELECAO_CONFIRMADA" +;
+        Chr(34) + ", payload);" + Chr(13) +;
+        Chr(10)
+    cHtml += "      }" + Chr(13) + Chr(10)
+    cHtml += "    }" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "    function cancelarSelecao() {" + Chr(13) + Chr(10)
+    cHtml += "      if (twebchannel) {" + Chr(13) + Chr(10)
+    cHtml += "        twebchannel.jsToAdvpl(" + Chr(39) + "CLOSE_PANEL" +;
+        Chr(39) + ", " + Chr(39) +;
+        Chr(39) + ");" + Chr(13) +;
+        Chr(10)
+    cHtml += "      }" + Chr(13) + Chr(10)
+    cHtml += "    }" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "    document.addEventListener(" + Chr(39) + "keydown" +;
+        Chr(39) + ", function(event) {" + Chr(13) +;
+        Chr(10)
+    cHtml += "      if (event.key === " + Chr(39) + "Escape" +;
+        Chr(39) + ") {" + Chr(13) +;
+        Chr(10)
+    cHtml += "        cancelarSelecao();" + Chr(13) + Chr(10)
+    cHtml += "        return;" + Chr(13) + Chr(10)
+    cHtml += "      }" + Chr(13) + Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "      if (document.activeElement.id !== " + Chr(39) + "txtSearch" +;
+        Chr(39) + ") {" + Chr(13) +;
+        Chr(10)
+    cHtml += "        var rows = document.querySelectorAll(" + Chr(39) + "#tbNotas tr[data-idx]" +;
+        Chr(39) + ");" + Chr(13) +;
+        Chr(10)
+    cHtml += "        var idxAtual = -1;" + Chr(13) + Chr(10)
+    cHtml += "        rows.forEach(function(r, pos) { if (parseInt(r.getAttribute(" + Chr(39) + "data-idx" +;
+        Chr(39) + "), 10) === selectedIndex) idxAtual = pos; });" + Chr(13) +;
+        Chr(10)
+    cHtml += "" + Chr(13) + Chr(10)
+    cHtml += "        if (event.key === " + Chr(39) + "Enter" +;
+        Chr(39) + ") {" + Chr(13) +;
+        Chr(10)
+    cHtml += "          event.preventDefault();" + Chr(13) + Chr(10)
+    cHtml += "          confirmarSelecao();" + Chr(13) + Chr(10)
+    cHtml += "        } else if (event.key === " + Chr(39) + "ArrowDown" +;
+        Chr(39) + ") {" + Chr(13) +;
+        Chr(10)
+    cHtml += "          event.preventDefault();" + Chr(13) + Chr(10)
+    cHtml += "          if (idxAtual >= 0 && idxAtual < rows.length - 1) {" + Chr(13) + Chr(10)
+    cHtml += "            var prox = rows[idxAtual + 1];" + Chr(13) + Chr(10)
+    cHtml += "            selecionarNota(parseInt(prox.getAttribute(" + Chr(39) + "data-idx" +;
+        Chr(39) + "), 10), prox);" + Chr(13) +;
+        Chr(10)
+    cHtml += "          }" + Chr(13) + Chr(10)
+    cHtml += "        } else if (event.key === " + Chr(39) + "ArrowUp" +;
+        Chr(39) + ") {" + Chr(13) +;
+        Chr(10)
+    cHtml += "          event.preventDefault();" + Chr(13) + Chr(10)
+    cHtml += "          if (idxAtual > 0) {" + Chr(13) + Chr(10)
+    cHtml += "            var ant = rows[idxAtual - 1];" + Chr(13) + Chr(10)
+    cHtml += "            selecionarNota(parseInt(ant.getAttribute(" + Chr(39) + "data-idx" +;
+        Chr(39) + "), 10), ant);" + Chr(13) +;
+        Chr(10)
+    cHtml += "          }" + Chr(13) + Chr(10)
+    cHtml += "        }" + Chr(13) + Chr(10)
+    cHtml += "      }" + Chr(13) + Chr(10)
+    cHtml += "    });" + Chr(13) + Chr(10)
+    cHtml += "  </script>" + Chr(13) + Chr(10)
+    cHtml += "</body>" + Chr(13) + Chr(10)
+    cHtml += "</html>" + Chr(13) + Chr(10)
+
+Return cHtml
+
+//---------------------------------------------------------
+/*/ Funcao: XFAT003NFT
+  Descricao: Consulta as NF da SF2/SA1 e envia a lista ao HTML.
+/*/
+//----------------------------------------------------------
+Static Function XFAT003NFT(oChanP)
+
+    Local cAliasQry := GetNextAlias()
+    Local cQry      := ""
+    Local jResult   := jsonObject():New()
+    Local jSelec    := jsonObject():New()
+    Local jItem
+    Local aNotas    := {}
+
+    cQry := " SELECT SF2.F2_FILIAL,SF2.F2_DOC,SF2.F2_SERIE,SF2.F2_EMISSAO,SF2.F2_CLIENTE,SF2.F2_LOJA,SA1.A1_NOME AS XA1NOME "
+    cQry += " FROM " + RetSqlName("SF2") + " SF2 "
+    cQry += " LEFT JOIN " + RetSqlName("SA1") + " SA1 "
+    cQry += "        ON SA1.A1_FILIAL = '" + xFilial("SA1") + "' "
+    cQry += "       AND SA1.A1_COD    = SF2.F2_CLIENTE "
+    cQry += "       AND SA1.A1_LOJA   = SF2.F2_LOJA "
+    cQry += "       AND SA1.D_E_L_E_T_ <> '*' "
+    cQry += " WHERE SF2.D_E_L_E_T_ <> '*' "
+    cQry += "   AND SF2.F2_FILIAL  = '" + xFilial("SF2") + "' "
+    cQry += "   AND ( ( SF2.F2_CLIENTE = '" + SC5->C5_CLIENTE + "' AND SF2.F2_LOJA = '" + SC5->C5_LOJACLI + "' ) "
+
+    If !Empty(cNfsNota)
+        cQry += "        OR ( SF2.F2_DOC = '" + cNfsNota + "' AND SF2.F2_SERIE = '" + cNfsSrie + "' ) "
+    EndIf
+
+    cQry += "       ) "
+    cQry += " ORDER BY SF2.F2_EMISSAO DESC, SF2.F2_DOC DESC "
+
+    cQry := ChangeQuery(cQry)
+    If Select(cAliasQry) <> 0
+        (cAliasQry)->(DbCloseArea())
+    EndIf
+    DbUseArea(.T., "TOPCONN", TcGenQry(,,cQry), cAliasQry, .T., .T.)
+    (cAliasQry)->(DbGoTop())
+
+    While !(cAliasQry)->(Eof())
+        jItem := jsonObject():New()
+        jItem["doc"]     := AllTrim((cAliasQry)->F2_DOC)
+        jItem["serie"]   := AllTrim((cAliasQry)->F2_SERIE)
+        jItem["emissao"] := DtoC(IIf(ValType((cAliasQry)->F2_EMISSAO) == "D", (cAliasQry)->F2_EMISSAO, STOD((cAliasQry)->F2_EMISSAO)))
+        jItem["cliente"] := DecodeUTF8(AllTrim((cAliasQry)->XA1NOME))
+        aAdd(aNotas, jItem)
+        (cAliasQry)->(DbSkip())
+    EndDo
+    (cAliasQry)->(DbCloseArea())
+
+    jSelec["doc"]   := AllTrim(cNfsNota)
+    jSelec["serie"] := AllTrim(cNfsSrie)
+
+    jResult["notas"]       := aNotas
+    jResult["selecionado"] := jSelec
+    jResult["titulo"]      := DecodeUTF8("Selecione a Nota Fiscal - Pedido " + AllTrim(SC5->C5_NUM))
+
+    oChanP:advplToJS("renderNFs", jResult:ToJson())
+
+Return
+
+//---------------------------------------------------------
+/*/ Funcao: XFAT003GNF
+  Descricao: Grava NF/Serie em C5_PEDECOM.
+/*/
+//----------------------------------------------------------
+Static Function XFAT003GNF(cNota, cSerie)
+
+    Local cPedeCom := IIf(!Empty(cNota), AllTrim(cNota) + IIf(!Empty(cSerie), "/" + AllTrim(cSerie), ""), "")
+
+    If !RecLock("SC5", .F.)
+        MsgAlert("Nao foi possivel atualizar o pedido para gravar a NF.", "Fatura de Cobranca")
+        Return .F.
+    EndIf
+
+    SC5->C5_PEDECOM := cPedeCom
+
+    MsUnlock()
+
+Return .T.
+
+//---------------------------------------------------------
+/*/ Funcao: XFAT003MNT
+  Descricao: Monta os dados da fatura e os itens do pedido.
 
   @author Raphael Neves (Hubvision)
-  @since  18/09/2026
 /*/
 //----------------------------------------------------------
 Static Function XFAT003MNT()
@@ -160,17 +958,19 @@ Static Function XFAT003MNT()
     XFAT003SET(oDados, "Condicao", Posicione("SE4", 1, xFilial("SE4") + SC5->C5_CONDPAG, "E4_DESCRI"))
     XFAT003SET(oDados, "Placa", AllTrim(cValToChar(SC5->C5_PLACA1)) + IIf(!Empty(SC5->C5_PLACA2), " / " + AllTrim(cValToChar(SC5->C5_PLACA2)), ""))
     XFAT003SET(oDados, "TpCobranca", "BOLETO BANCARIO")
-    XFAT003SET(oDados, "NFRelac", "")
+    XFAT003SET(oDados, "NFRelac", AllTrim(cValToChar(SC5->C5_PEDECOM)))
 
     XFAT003SET(oDados, "ObsMenNota", IIf(Type("SC5->C5_MENNOTA") != "U", AllTrim(cValToChar(SC5->C5_MENNOTA)), ""))
     XFAT003SET(oDados, "ObsXMsgI", IIf(Type("SC5->C5_XMSGI") != "U", AllTrim(cValToChar(SC5->C5_XMSGI)), ""))
+    XFAT003SET(oDados, "ObsXMpObs", IIf(Type("SC5->C5_XMPOBS") != "U", AllTrim(cValToChar(SC5->C5_XMPOBS)), ""))
+    XFAT003SET(oDados, "ObsXMpMOb", IIf(Type("SC5->C5_XMPMOBS") != "U", AllTrim(cValToChar(SC5->C5_XMPMOBS)), ""))
 
     cLocalEnt := AllTrim(cValToChar(SC5->C5_DESCMUN))
     If Empty(cLocalEnt)
         DbSelectArea("SA1")
         DbSetOrder(1)
         If DbSeek(xFilial("SA1") + cCliEnt + cLojEnt)
-            cLocalEnt := XFAT003ENDER(;
+            cLocalEnt := XFAT003ADR(;
                 IIf(Type("SA1->A1_ENDENT") != "U" .And. !Empty(SA1->A1_ENDENT), SA1->A1_ENDENT, SA1->A1_END),;
                 IIf(Type("SA1->A1_BAIRROE") != "U" .And. !Empty(SA1->A1_BAIRROE), SA1->A1_BAIRROE, SA1->A1_BAIRRO),;
                 IIf(Type("SA1->A1_COMPENT") != "U" .And. !Empty(SA1->A1_COMPENT), SA1->A1_COMPENT, IIf(Type("SA1->A1_COMPLEM") != "U", SA1->A1_COMPLEM, "")),;
@@ -184,7 +984,7 @@ Static Function XFAT003MNT()
 
     XFAT003SET(oDados, "ClienteNome", SA1->A1_NOME)
     XFAT003SET(oDados, "ClienteCgc", SA1->A1_CGC)
-    XFAT003SET(oDados, "ClienteEnd", XFAT003ENDER(SA1->A1_END, SA1->A1_BAIRRO, IIf(Type("SA1->A1_COMPLEM") != "U", SA1->A1_COMPLEM, ""), SA1->A1_CEP, "", ""))
+    XFAT003SET(oDados, "ClienteEnd", XFAT003ADR(SA1->A1_END, SA1->A1_BAIRRO, IIf(Type("SA1->A1_COMPLEM") != "U", SA1->A1_COMPLEM, ""), SA1->A1_CEP, "", ""))
     XFAT003SET(oDados, "ClienteMun", AllTrim(cValToChar(SA1->A1_MUN)))
     XFAT003SET(oDados, "ClienteEst", AllTrim(cValToChar(SA1->A1_EST)))
 
@@ -227,17 +1027,10 @@ Static Function XFAT003MNT()
 Return oDados
 
 //---------------------------------------------------------
-/*/ Rotina XFAT003
-  Funcao XFAT003FIL()
-
-  Descricao:
-  Busca no cadastro de Filiais (SM0), atraves da classe
-  FWSM0Util, o Nome Comercial, o CNPJ, o Bairro e a UF da
-  filial corrente (cEmpAnt/cFilAnt) e acopla os valores no
-  array de impressao para uso no cabecalho do documento.
+/*/ Funcao: XFAT003FIL
+  Descricao: Busca os dados da filial para o cabecalho da fatura.
 
   @author Raphael Neves (Hubvision)
-  @since  19/09/2026
 /*/
 //----------------------------------------------------------
 Static Function XFAT003FIL(oDados)
@@ -253,24 +1046,10 @@ Static Function XFAT003FIL(oDados)
 Return
 
 //---------------------------------------------------------
-/*/ Rotina XFAT003
-  Funcao XFAT003BCO() - (Antiga XFAT003DadosBancarios)
-
-  Descricao:
-  Identifica qual a conta bancaria configurada para emissao
-  de faturas no Protheus. Nao usa mais o campo A6_XFATUR para
-  selecionar o banco; em vez disso, le o banco/agencia/conta do
-  parametro MV_XBANKBO (mesmo parametro usado por XFAT003BOR()
-  na geracao do bordero/boleto do pedido) e localiza o
-  respectivo registro na SA6 via MsSeek, garantindo que a fatura
-  impressa mostre exatamente a mesma conta que sera usada para
-  emitir o boleto. O Banco e exibido como "codigo - nome"
-  (A6_COD + A6_NREDUZ, caindo para A6_NOME quando o reduzido
-  estiver vazio). Agencia e Conta so exibem o digito verificador
-  (A6_DVAGE/A6_DVCTA) quando ele estiver preenchido.
+/*/ Funcao: XFAT003BCO
+  Descricao: Busca os dados bancarios utilizados na fatura.
 
   @author Raphael Neves (Hubvision)
-  @since  18/09/2026
 /*/
 //----------------------------------------------------------
 Static Function XFAT003BCO(oDados)
@@ -304,24 +1083,10 @@ Static Function XFAT003BCO(oDados)
 Return
 
 //---------------------------------------------------------
-/*/ Rotina XFAT003
-  Funcao XFAT003PIX() - (Antiga XFAT003BuscaPix)
-
-  Descricao:
-  Recebe os dados do banco localizado e busca na tabela de
-  chaves PIX (F70) qual e a chave ativa ('1') vinculada a
-  esta conta especifica, retornando-a para a rotina chamadora.
-
-  Obs: a clausula "TOP 1" foi removida da query pois e sintaxe
-  exclusiva do T-SQL/Sybase e nao e reconhecida pelo Oracle
-  (gera o erro ORA-00923). A rotina chamadora ja le apenas o
-  primeiro registro do cursor (If !(cAlias)->(Eof())), sem
-  looping, entao a ausencia do limitador de linhas nao altera
-  o comportamento e a query passa a ser portavel entre os
-  bancos homologados (Oracle e MSSQL).
+/*/ Funcao: XFAT003PIX
+  Descricao: Retorna a chave PIX associada a conta bancaria.
 
   @author Raphael Neves (Hubvision)
-  @since  18/09/2026
 /*/
 //----------------------------------------------------------
 Static Function XFAT003PIX(cCodBco, cAgencia, cNumCon)
@@ -348,17 +1113,10 @@ Static Function XFAT003PIX(cCodBco, cAgencia, cNumCon)
 Return cChave
 
 //---------------------------------------------------------
-/*/ Rotina XFAT003
-  Funcao XFAT003SET()
-
-  Descricao:
-  Grava uma chave no array de impressao (forma classica, sem
-  Hash Map). Caso a chave ja exista, atualiza o valor na mesma
-  posicao; caso contrario, acrescenta um novo par {chave,valor}
-  ao final do array.
+/*/ Funcao: XFAT003SET
+  Descricao: Salva um valor no array de dados da fatura.
 
   @author Raphael Neves (Hubvision)
-  @since  19/09/2026
 /*/
 //----------------------------------------------------------
 Static Function XFAT003SET(oDados, cChave, xValor)
@@ -374,16 +1132,10 @@ Static Function XFAT003SET(oDados, cChave, xValor)
 Return
 
 //---------------------------------------------------------
-/*/ Rotina XFAT003
-  Funcao XFAT003GET()
-
-  Descricao:
-  Busca uma chave no array de impressao (forma classica, sem
-  Hash Map), percorrendo os pares {chave,valor} com AScan().
-  Retorna xDefault somente quando a chave nao for encontrada.
+/*/ Funcao: XFAT003GET
+  Descricao: Le um valor do array de dados da fatura.
 
   @author Raphael Neves (Hubvision)
-  @since  19/09/2026
 /*/
 //----------------------------------------------------------
 Static Function XFAT003GET(oDados, cChave, xDefault)
@@ -393,20 +1145,13 @@ Static Function XFAT003GET(oDados, cChave, xDefault)
 Return IIf(nPos > 0, oDados[nPos][2], xDefault)
 
 //---------------------------------------------------------
-/*/ Rotina XFAT003
-  Funcao XFAT003MASK()
-
-  Descricao:
-  Aplica a mascara de CNPJ (14 digitos) ou CPF (11 digitos) a
-  uma string de documento, conforme o layout do modelo Excel
-  do cliente (ex.: 52.535.498/0001-90). Documentos com outra
-  quantidade de digitos sao retornados sem mascara.
+/*/ Funcao: XFAT003MSK
+  Descricao: Formata CPF/CNPJ para exibicao.
 
   @author Raphael Neves (Hubvision)
-  @since  19/09/2026
 /*/
 //----------------------------------------------------------
-Static Function XFAT003MASK(cDoc)
+Static Function XFAT003MSK(cDoc)
 
     Local cLimpo := StrTran(StrTran(StrTran(AllTrim(cValToChar(cDoc)), ".", ""), "/", ""), "-", "")
     Local cRet   := cLimpo
@@ -420,21 +1165,13 @@ Static Function XFAT003MASK(cDoc)
 Return cRet
 
 //---------------------------------------------------------
-/*/ Rotina XFAT003
-  Funcao XFAT003ENDER()
-
-  Descricao:
-  Monta uma string de endereco completa a partir de rua,
-  bairro, complemento, CEP e, opcionalmente, municipio/UF
-  (passar "" em cMun quando cidade/UF ja forem exibidos em
-  outro campo do layout, evitando repeticao). Cada parte so
-  entra na string se estiver preenchida.
+/*/ Funcao: XFAT003ADR
+  Descricao: Monta a descricao do endereco para a fatura.
 
   @author Raphael Neves (Hubvision)
-  @since  20/09/2026
 /*/
 //----------------------------------------------------------
-Static Function XFAT003ENDER(cEnd, cBairro, cComplem, cCep, cMun, cEst)
+Static Function XFAT003ADR(cEnd, cBairro, cComplem, cCep, cMun, cEst)
 
     Local cRet := AllTrim(cValToChar(cEnd))
 
@@ -457,45 +1194,10 @@ Static Function XFAT003ENDER(cEnd, cBairro, cComplem, cCep, cMun, cEst)
 Return cRet
 
 //---------------------------------------------------------
-/*/ Rotina XFAT003
-  Funcao XFAT003PDF() - (Antiga XFAT003GeraPDF)
-
-  Descricao:
-  Motor de geracao de relatorio usando a classe FWMSPrinter.
-  Recebe o array de impressao populado com todas as informacoes, tipa
-  corretamente as variaveis locais e desenha os componentes
-  visuais do PDF (caixas, faixas coloridas e textos), replicando
-  o modelo Excel do cliente: bloco azul marinho do nome do
-  emitente a esquerda do cabecalho, caixa branca a direita com
-  "FATURA DE COBRANCA" e a grade 2x2 de No da Fatura/Emissao/
-  Vencimento/Condicao, exibindo o PDF na tela para o usuario ao
-  final do processo. Margem direita (nDir) calculada a partir da
-  largura da pagina A4 (nLargPag=595) menos uma margem direita
-  fixa (nMargDir=40), equivalente ao recuo visual da margem
-  esquerda (nEsq=15). Observacoes exibe tambem, quando
-  preenchidos, o conteudo dos campos memo C5_MENNOTA/C5_XMSGI,
-  com altura de caixa calculada dinamicamente conforme a
-  quantidade de linhas necessarias para nao perder texto. Na
-  tabela de itens, a Descricao tambem quebra linha (altura por
-  item calculada dinamicamente) e as linhas alternam fundo
-  branco/cinza claro (zebrado) para diferenciar um item do
-  outro. A linha VALOR A PAGAR e destacada com fundo escuro e
-  texto branco. IMPORTANTE: o metodo Box() do FWMSPrinter limpa
-  para branco toda a area interna do retangulo ao ser
-  desenhado (nao e apenas um contorno); por isso Box()/Line()
-  sao sempre desenhados ANTES de qualquer conteudo (FillRect ou
-  SayAlign) na mesma area - nunca depois, sob pena de apagar
-  tudo que foi desenhado antes dele. Quando um FillRect (como o
-  zebrado) precisa cobrir uma faixa que ja tem linhas divisorias
-  de fundo, essas linhas sao redesenhadas por cima do FillRect
-  logo em seguida (Line() e apenas um traco, nao limpa a area).
-  Ao final, oPrint e todos os objetos TFont/TBrush criados sao
-  liberados explicitamente via FreeObj() (alem de zerados com
-  Nil), evitando acumulo de handles de fonte/pincel (recursos de
-  GDI) no processo do AppServer a cada fatura gerada.
+/*/ Funcao: XFAT003PDF
+  Descricao: Gera o PDF da fatura com cabecalho, itens e valores.
 
   @author Raphael Neves (Hubvision)
-  @since  18/09/2026
 /*/
 //----------------------------------------------------------
 Static Function XFAT003PDF(oDados)
@@ -538,6 +1240,9 @@ Static Function XFAT003PDF(oDados)
     Local cTxtDisc
     Local cObsMenNota := cValToChar(XFAT003GET(oDados, "ObsMenNota", ""))
     Local cObsXMsgI   := cValToChar(XFAT003GET(oDados, "ObsXMsgI", ""))
+    Local cObsXMpObs  := cValToChar(XFAT003GET(oDados, "ObsXMpObs", ""))
+    Local cObsXMpMOb  := cValToChar(XFAT003GET(oDados, "ObsXMpMOb", ""))
+    Local aMsgsAdic   := {}
     Local nLargObs
     Local nCharsLinha
     Local nAltDisc   := 34
@@ -614,7 +1319,7 @@ Static Function XFAT003PDF(oDados)
     nLin += nAltCab
 
     oPrint:FillRect({nLin, nEsq, nLin + 15, nDir}, oBrushCinza)
-    oPrint:SayAlign(nLin + 2, nEsq + 5, cEmitNome + "  |  CNPJ: " + XFAT003MASK(cEmitCgc) + "  |  " + cEmitBairro + "/" + cEmitUf, oFontLbl, nDir - nEsq - 10, 10, CLR_BLACK, 2, 1)
+    oPrint:SayAlign(nLin + 2, nEsq + 5, cEmitNome + "  |  CNPJ: " + XFAT003MSK(cEmitCgc) + "  |  " + cEmitBairro + "/" + cEmitUf, oFontLbl, nDir - nEsq - 10, 10, CLR_BLACK, 2, 1)
     nLin += 20
 
     oPrint:FillRect({nLin, nEsq, nLin + 18, nDir}, oBrushFaixa)
@@ -626,7 +1331,7 @@ Static Function XFAT003PDF(oDados)
     oPrint:Line(nLin + 40, nEsq, nLin + 40, nDir)
     oPrint:Line(nLin + 20, nEsq + 248, nLin + 40, nEsq + 248)
     oPrint:SayAlign(nLin + 2, nEsq + 5, "Razao Social: " + cCliNome, oFontLbl, nDir - nEsq - 10, 15, CLR_BLACK, 0, 1)
-    oPrint:SayAlign(nLin + 22, nEsq + 5, "CNPJ/CPF: " + XFAT003MASK(cCliCgc), oFontLbl, 240, 15, CLR_BLACK, 0, 1)
+    oPrint:SayAlign(nLin + 22, nEsq + 5, "CNPJ/CPF: " + XFAT003MSK(cCliCgc), oFontLbl, 240, 15, CLR_BLACK, 0, 1)
     oPrint:SayAlign(nLin + 22, nEsq + 252, "Cidade/UF: " + cCliMun + "/" + cCliEst, oFontLbl, 240, 15, CLR_BLACK, 0, 1)
     oPrint:SayAlign(nLin + 42, nEsq + 5, "Endereco: " + cCliEnd, oFontLbl, nDir - nEsq - 10, 28, CLR_BLACK, 0, 1)
     nLin += 74
@@ -652,11 +1357,11 @@ Static Function XFAT003PDF(oDados)
     nLin += nAltTpLoc
 
     oPrint:FillRect({nLin, nEsq, nLin + 18, nDir}, oBrushFaixa)
-    oPrint:SayAlign(nLin + 2, nEsq + 5, "Item"                 , oFontSec, 30, 12, CLR_WHITE, 0, 1)
-    oPrint:SayAlign(nLin + 2, nEsq + 38, "Descricao"            , oFontSec, 200, 12, CLR_WHITE, 0, 1)
-    oPrint:SayAlign(nLin + 2, nEsq + 248, "Qtd."                 , oFontSec, 47, 12, CLR_WHITE, 0, 1)
-    oPrint:SayAlign(nLin + 2, nEsq + 303, "Valor Unitario (R$)"  , oFontSec, 92, 12, CLR_WHITE, 0, 1)
-    oPrint:SayAlign(nLin + 2, nEsq + 403, "Valor Total (R$)"     , oFontSec, 92, 12, CLR_WHITE, 0, 1)
+    oPrint:SayAlign(nLin + 2, nEsq + 5, "Item"                    , oFontSec, 30, 12, CLR_WHITE, 0, 1)
+    oPrint:SayAlign(nLin + 2, nEsq + 38, "Descricao"               , oFontSec, 200, 12, CLR_WHITE, 0, 1)
+    oPrint:SayAlign(nLin + 2, nEsq + 248, "Qtd horas"              , oFontSec, 47, 12, CLR_WHITE, 0, 1)
+    oPrint:SayAlign(nLin + 2, nEsq + 303, "Valor/Hora(R$)"         , oFontSec, 92, 12, CLR_WHITE, 0, 1)
+    oPrint:SayAlign(nLin + 2, nEsq + 403, "Valor Total Horas(R$)"  , oFontSec, 92, 12, CLR_WHITE, 0, 1)
     nLin += 18
 
     nAltItens := 0
@@ -741,34 +1446,52 @@ Static Function XFAT003PDF(oDados)
     nCharsLinha := Int(nLargObs / 4.5)
     nAltObs   := nAltDisc
 
+    aMsgsAdic := {}
+
     If !Empty(cObsMenNota)
-        cTextoDest := "Mensagem: " + cObsMenNota
-        nLinhas    := Int((Len(cTextoDest) - 1) / nCharsLinha) + 1
-        nAltObs    += (nLinhas * 12) + 4
+        aAdd(aMsgsAdic, cObsMenNota)
     EndIf
 
     If !Empty(cObsXMsgI)
-        cTextoDest := "Obs. Adicional: " + cObsXMsgI
+        aAdd(aMsgsAdic, cObsXMsgI)
+    EndIf
+
+    If !Empty(cObsXMpObs)
+        aAdd(aMsgsAdic, cObsXMpObs)
+    EndIf
+
+    If !Empty(cObsXMpMOb)
+        aAdd(aMsgsAdic, cObsXMpMOb)
+    EndIf
+
+    If Len(aMsgsAdic) > 0
+        cTextoDest := "Mensagem adicional: " + aMsgsAdic[1]
         nLinhas    := Int((Len(cTextoDest) - 1) / nCharsLinha) + 1
         nAltObs    += (nLinhas * 12) + 4
+
+        For nX := 2 To Len(aMsgsAdic)
+            cTextoDest := aMsgsAdic[nX]
+            nLinhas    := Int((Len(cTextoDest) - 1) / nCharsLinha) + 1
+            nAltObs    += (nLinhas * 12) + 4
+        Next nX
     EndIf
 
     oPrint:Box(nLin, nEsq, nLin + nAltObs, nDir)
     oPrint:SayAlign(nLin + 3, nEsq + 5, cTxtDisc, oFontLbl, nLargObs, nAltDisc - 4, CLR_BLACK, 0, 1)
     nLinObs := nLin + nAltDisc
 
-    If !Empty(cObsMenNota)
-        cTextoDest := "Mensagem: " + cObsMenNota
+    If Len(aMsgsAdic) > 0
+        cTextoDest := "Mensagem adicional: " + aMsgsAdic[1]
         nLinhas    := Int((Len(cTextoDest) - 1) / nCharsLinha) + 1
         oPrint:SayAlign(nLinObs + 2, nEsq + 5, cTextoDest, oFontDest, nLargObs, nLinhas * 12, CLR_BLACK, 0, 1)
         nLinObs    += (nLinhas * 12) + 4
-    EndIf
 
-    If !Empty(cObsXMsgI)
-        cTextoDest := "Obs. Adicional: " + cObsXMsgI
-        nLinhas    := Int((Len(cTextoDest) - 1) / nCharsLinha) + 1
-        oPrint:SayAlign(nLinObs + 2, nEsq + 5, cTextoDest, oFontDest, nLargObs, nLinhas * 12, CLR_BLACK, 0, 1)
-        nLinObs    += (nLinhas * 12) + 4
+        For nX := 2 To Len(aMsgsAdic)
+            cTextoDest := aMsgsAdic[nX]
+            nLinhas    := Int((Len(cTextoDest) - 1) / nCharsLinha) + 1
+            oPrint:SayAlign(nLinObs + 2, nEsq + 5, cTextoDest, oFontDest, nLargObs, nLinhas * 12, CLR_BLACK, 0, 1)
+            nLinObs    += (nLinhas * 12) + 4
+        Next nX
     EndIf
 
     nLin += nAltObs
@@ -802,51 +1525,9 @@ Static Function XFAT003PDF(oDados)
 Return
 
 //---------------------------------------------------------
-/*/ Rotina XFAT003
-  Funcao XFAT003BOL()
-
-  Descricao:
-  Gera o(s) titulo(s) financeiro(s) (SE1) do pedido para
-  possibilitar a emissao do boleto, apos o usuario confirmar
-  em U_XFAT003(). Antes de gerar qualquer coisa, verifica se ja
-  existe titulo (E1_PREFIXO=FAT/E1_NUM=pedido) para este pedido
-  e, se existir, aborta sem duplicar. O valor a receber
-  (ValorPagar da fatura) e
-  desdobrado em parcelas atraves da funcao padrao Condicao(),
-  conforme a condicao de pagamento do pedido (SC5->C5_CONDPAG),
-  com data base dDataBase tanto para a emissao quanto para o
-  calculo das parcelas. Cada parcela retornada por Condicao()
-  gera um titulo via FINA040 (MsExecAuto), com E1_PREFIXO fixo
-  "FAT", E1_NUM igual ao numero do pedido (SC5->C5_NUM) e
-  E1_TIPO "BOL". O codigo do campo de natureza financeira a
-  gravar (E1_NATUREZ) e definido dinamicamente pelo parametro
-  MV_1DUPNAT, que contem a expressao completa do campo a ser
-  lido, ja com o alias (por exemplo SC5->C5_NATUREZ ou
-  SA1->A1_NATUREZ), resolvida em tempo de execucao via
-  substituicao de macro; o codigo resolvido e conferido contra o
-  cadastro de Natureza Financeira (SED) antes de acionar o
-  FINA040, evitando repassar uma natureza inexistente/invalida
-  para dentro do ExecAuto. E1_EMISSAO usa dDtBase (dDataBase do
-  sistema, com fallback para Date() quando vazia, evitando um
-  valor de tipo indefinido no array do MsExecAuto). Tambem sao
-  gravados E1_MOEDA (fixo 1) e E1_HIST (historico com o numero
-  do pedido), presentes nos exemplos oficiais de ExecAuto do
-  FINA040. Sao tambem gravados E1_PORTADO/E1_AGEDEP/E1_CONTA
-  (banco/agencia/conta), obtidos do mesmo parametro MV_XBANKBO
-  usado por XFAT003BOR() para o bordero - sem esses campos ja
-  preenchidos no titulo, o FINA060 nao localiza o titulo entre
-  os elegiveis para o bordero (erro AJUDA:RECNO "Nao existem
-  registros no arquivo em pauta"). Cada chave gravada em aTitBord
-  (E1_FILIAL/E1_PREFIXO/E1_NUM/E1_PARCELA/E1_TIPO) e preenchida
-  com PadR() no tamanho exato do respectivo campo da SE1, ja que
-  E1_NUM (C5_NUM do pedido) pode vir mais curto que o tamanho
-  cadastrado do campo (ex.: 9), e o FINA060 e o MsSeek na SEA em
-  XFAT003BXB() dependem da chave com o tamanho fixo exato para
-  localizar o titulo. Ao final, aciona XFAT003BOR() para gerar o
-  bordero e o download automatico do(s) boleto(s).
-
+/*/ Funcao: XFAT003BOL
+  Descricao: Gera o(s) titulo(s) (SE1) e aciona o bordero/boleto.
   @author Raphael Neves (Hubvision)
-  @since  21/09/2026
 /*/
 //----------------------------------------------------------
 Static Function XFAT003BOL(oDados)
@@ -983,25 +1664,10 @@ Static Function XFAT003BOL(oDados)
 Return
 
 //---------------------------------------------------------
-/*/ Rotina XFAT003
-  Funcao XFAT003BOR() - (Baseada na fnGerBor do XFAT001)
-
-  Descricao:
-  Gera o bordero automaticamente para o(s) titulo(s) recem
-  criados pela XFAT003BOL(), usando o banco/agencia/conta/
-  subconta configurados no parametro MV_XBANKBO - o mesmo
-  parametro que o XFAT001 usa para a emissao do boleto a
-  partir da Nota Fiscal, dispensando nova busca de banco na
-  SA6 por A6_XFATUR. Banco, agencia e conta sao preenchidos com
-  PadR() no tamanho dos campos correspondentes da SEA
-  (EA_PORTADO/EA_AGEDEP/EA_NUMCON), da mesma forma que a
-  subconta (EA_SUBCTA), evitando gravar no aRegBor/bordero uma
-  string de tamanho divergente do cadastro. Ao final, aciona
-  XFAT003BXB() para o download automatico do(s) boleto(s), sem
-  exibir nenhuma tela ao usuario.
+/*/ Funcao: XFAT003BOR
+  Descricao: Gera o bordero para os titulos da fatura.
 
   @author Raphael Neves (Hubvision)
-  @since  20/09/2026
 /*/
 //----------------------------------------------------------
 Static Function XFAT003BOR(aTitBord)
@@ -1065,22 +1731,10 @@ Static Function XFAT003BOR(aTitBord)
 Return
 
 //---------------------------------------------------------
-/*/ Rotina XFAT003
-  Funcao XFAT003LOG() - Exibe log de erro da rotina automatica
-
-  Descricao:
-  Substitui a chamada padrao a MostraErro() apos um MsExecAuto()
-  retornar com erro (FINA040/FINA060). Como as funcoes XFAT003BOL()
-  e XFAT003BOR() declaram lAutoErrNoFile := .T. (para nao gravar o
-  log de erro em arquivo), o texto do erro fica retido no buffer
-  interno da rotina automatica e MostraErro() e exibida em branco,
-  conforme o KB e o TDN informados pelo usuario. Recupera o log via
-  GetAutoGRLog(), remove os caracteres de formatacao ("<" e "-") de
-  cada linha e apresenta o resultado consolidado atraves de
-  FWAlertError(), estilizado com CSS embutido no HTML da mensagem.
+/*/ Funcao: XFAT003LOG
+  Descricao: Exibe o erro da rotina automatica.
 
   @author Raphael Neves (Hubvision)
-  @since  21/09/2026
 /*/
 //----------------------------------------------------------
 Static Function XFAT003LOG()
@@ -1111,19 +1765,10 @@ Static Function XFAT003LOG()
 Return
 
 //---------------------------------------------------------
-/*/ Rotina XFAT003
-  Funcao XFAT003BXB() - (Baseada na BxBoleto do XFAT001)
-
-  Descricao:
-  Realiza o download automatico do(s) boleto(s) gerado(s) pela
-  XFAT003BOR(), sem exibir nenhuma tela de selecao ao usuario
-  (ao contrario do XFAT002, que exibe uma tela para o usuario
-  escolher e imprimir manualmente). Confere na SEA se cada
-  titulo foi transmitido/autorizado (EA_TRANSF = "S") antes de
-  incluir no pedido de download do PDF.
+/*/ Funcao: XFAT003BXB
+  Descricao: Faz o download do(s) boleto(s) gerado(s).
 
   @author Raphael Neves (Hubvision)
-  @since  20/09/2026
 /*/
 //----------------------------------------------------------
 Static Function XFAT003BXB(aTitBord, cNumBor)
@@ -1194,30 +1839,10 @@ Static Function XFAT003BXB(aTitBord, cNumBor)
 Return
 
 //---------------------------------------------------------
-/*/ Rotina XFAT003
-  Funcao XFATBOL() - Reimpressao/Download de Boleto
-
-  Descricao:
-  Tela de reimpressao/download de boleto(s) gerados por
-  XFAT003BOL()/XFAT003BOR(), no mesmo padrao (FWTemporaryTable +
-  FWMarkBrowse + FWDialogModal) da tela de boleto do XFAT002
-  (referencia XFAT002.prw). Acionada pela opcao "Outras Acoes ->
-  Fatura -> Imprimir Boleto" do Pedido de Venda (Ponto de
-  Entrada MA410MNU, que chama U_XFATBOL). Nao solicita nenhum
-  parametro ao usuario (ParamBox); considera diretamente o
-  Pedido de Venda posicionado (SC5->C5_NUM). A tabela temporaria
-  (alias em Private cAliasBrw) e populada por XFAT003TAB() a
-  partir da SEA (mesmos filtros do XFAT002: EA_CART="R" e
-  EA_BORAPI="S"), restrita a EA_PREFIXO="FAT" e EA_NUM igual ao
-  pedido posicionado. O usuario marca um ou mais boletos e aciona
-  "Reimprimir" (XFAT003BX2, mesma logica da BxBoleto do XFAT002,
-  usando o numero de bordero de cada linha marcada). As colunas
-  de status (verde/azul/vermelho) e o detalhe do erro usam
-  XFAT003STA()/XFAT003ERR() (equivalentes a BrwStatus/BrwVisErr
-  do XFAT002).
+/*/ Funcao: XFATBOL
+  Descricao: Reimprime boletos do pedido.
 
   @author Raphael Neves (Hubvision)
-  @since  21/09/2026
 /*/
 //----------------------------------------------------------
 User Function XFATBOL()
@@ -1322,21 +1947,16 @@ User Function XFATBOL()
     oTabTMP:Delete()
     oMarkBrowse:DeActivate()
 
+    oTabTMP     := Nil
+    oMarkBrowse := Nil
+    cAliasBrw   := Nil
+
 Return
 
 //---------------------------------------------------------
-/*/ Rotina XFAT003
-  Funcao MenuDef() - Menu MVC da tela XFATBOL
-
-  Descricao:
-  Menu da tela de reimpressao de boleto (mesma convencao MVC do
-  XFAT002), sem opcoes adicionais: a geracao do boleto ja e feita
-  por XFAT003BOL()/XFAT003BOR() a partir da fatura, entao esta
-  tela e usada apenas para reimprimir/baixar o PDF (botao
-  "Reimprimir" da FWDialogModal).
-
+/*/ Funcao: MenuDef
+  Descricao: Menu MVC da tela XFATBOL.
   @author Raphael Neves (Hubvision)
-  @since  21/09/2026
 /*/
 //----------------------------------------------------------
 Static Function MenuDef()
@@ -1346,18 +1966,9 @@ Static Function MenuDef()
 Return aRotina
 
 //---------------------------------------------------------
-/*/ Rotina XFAT003
-  Funcao XFAT003TAB() - Monta a tabela temporaria da XFATBOL
-
-  Descricao:
-  Popula a tabela temporaria (cAliasBrw) da tela de reimpressao
-  de boleto a partir da SEA, nos mesmos moldes da fDadosTab() do
-  XFAT002 (mesmos filtros EA_CART="R" e EA_BORAPI="S"), restrita
-  aos boletos gerados por XFAT003BOL() (EA_PREFIXO="FAT") para o
-  Pedido de Venda posicionado (SC5->C5_NUM).
-
+/*/ Funcao: XFAT003TAB
+  Descricao: Popula a tabela temporaria da tela XFATBOL.
   @author Raphael Neves (Hubvision)
-  @since  21/09/2026
 /*/
 //----------------------------------------------------------
 Static Function XFAT003TAB()
@@ -1406,16 +2017,9 @@ Static Function XFAT003TAB()
 Return
 
 //---------------------------------------------------------
-/*/ Rotina XFAT003
-  Funcao XFAT003MRK() - Marca/desmarca todos (equivalente AllMark)
-
-  Descricao:
-  Marca ou desmarca todos os boletos autorizados (TP_TRANSF="S")
-  da tela de reimpressao de boleto, mesma logica da AllMark() do
-  XFAT002.
-
+/*/ Funcao: XFAT003MRK
+  Descricao: Marca/desmarca todos os boletos autorizados.
   @author Raphael Neves (Hubvision)
-  @since  21/09/2026
 /*/
 //----------------------------------------------------------
 Static Function XFAT003MRK()
@@ -1436,16 +2040,9 @@ Static Function XFAT003MRK()
 Return
 
 //---------------------------------------------------------
-/*/ Rotina XFAT003
-  Funcao XFAT003VLM() - Valida se a linha pode ser marcada (equivalente ValidMark)
-
-  Descricao:
-  Impede a marcacao de um boleto ainda nao autorizado
-  (TP_TRANSF diferente de "S"), mesma logica da ValidMark() do
-  XFAT002.
-
+/*/ Funcao: XFAT003VLM
+  Descricao: Impede marcar boleto ainda nao autorizado.
   @author Raphael Neves (Hubvision)
-  @since  21/09/2026
 /*/
 //----------------------------------------------------------
 Static Function XFAT003VLM()
@@ -1459,16 +2056,9 @@ Static Function XFAT003VLM()
 Return lRet
 
 //---------------------------------------------------------
-/*/ Rotina XFAT003
-  Funcao XFAT003STA() - Status do registro (equivalente BrwStatus)
-
-  Descricao:
-  Retorna a cor da linha da tela de reimpressao de boleto
-  conforme SEA.EA_TRANSF (verde=autorizado, azul=aguardando,
-  vermelho=erro), mesma logica da BrwStatus() do XFAT002.
-
+/*/ Funcao: XFAT003STA
+  Descricao: Retorna a cor da linha conforme EA_TRANSF.
   @author Raphael Neves (Hubvision)
-  @since  21/09/2026
 /*/
 //----------------------------------------------------------
 Static Function XFAT003STA()
@@ -1498,16 +2088,9 @@ Static Function XFAT003STA()
 Return cRet
 
 //---------------------------------------------------------
-/*/ Rotina XFAT003
-  Funcao XFAT003ERR() - Mensagem de erro (equivalente BrwVisErr)
-
-  Descricao:
-  Exibe o log de erro (SEA.EA_APILOG) do boleto atualmente
-  posicionado na tela de reimpressao, quando SEA.EA_TRANSF="F",
-  mesma logica da BrwVisErr() do XFAT002.
-
+/*/ Funcao: XFAT003ERR
+  Descricao: Exibe o log de erro do boleto posicionado.
   @author Raphael Neves (Hubvision)
-  @since  21/09/2026
 /*/
 //----------------------------------------------------------
 Static Function XFAT003ERR()
@@ -1531,20 +2114,9 @@ Static Function XFAT003ERR()
 Return
 
 //---------------------------------------------------------
-/*/ Rotina XFAT003
-  Funcao XFAT003BX2() - Reimpressao/download dos boletos marcados (equivalente BxBoleto)
-
-  Descricao:
-  Percorre a tabela temporaria da tela de reimpressao de boleto
-  e, para cada linha marcada (TP_MARK), monta o corpo da
-  requisicao de download usando o numero de bordero da propria
-  linha (TP_NUMBOR), permitindo reimprimir boletos de borderos
-  diferentes em uma unica chamada. Mesma logica da BxBoleto() do
-  XFAT002, usando CopyFile() (nao __CopyFile()) para a copia do
-  PDF gerado.
-
+/*/ Funcao: XFAT003BX2
+  Descricao: Reimprime/baixa os boletos marcados.
   @author Raphael Neves (Hubvision)
-  @since  21/09/2026
 /*/
 //----------------------------------------------------------
 Static Function XFAT003BX2()
